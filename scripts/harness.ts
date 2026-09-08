@@ -1,12 +1,12 @@
 // Harness driver (synthetic iteration — no browser yet).
 //
 // Drives the repo corpus through the deterministic core: parse step
-// definitions, extract used steps from features, then classify each used
-// step as COMPOSITE (a def), CORE (renders to an agent-browser command), or
-// UNDEFINED (needs a def / extends baseline).
+// definitions + scenarios, validate purity, classify each used step
+// (COMPOSITE / CORE / UNDEFINED), unroll composites, then simulate a run
+// through the ledger and print the summary report.
 //
 // Usage: npm run harness [root]
-// This is the seed of the `index` coverage tool and, later, the runner.
+// This is the seed of the `index` coverage tool and the future runner.
 
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { parseDefinitions } from "../src/parse.ts";
@@ -14,6 +14,7 @@ import { matchPattern } from "../src/match.ts";
 import { renderStep } from "../src/core.ts";
 import { validateDefinitions } from "../src/validate.ts";
 import { expandStep } from "../src/expand.ts";
+import { report, type RunLedger } from "../src/ledger.ts";
 
 const root = process.argv[2] ?? ".";
 const baseUrl = "http://127.0.0.1:8099/";
@@ -34,14 +35,28 @@ if (violations.length) {
   for (const v of violations) console.log(`  !! ${v.pattern} — ${v.message}`);
 }
 
-const featuresDir = `${root}/features`;
+// Parse features into ordered scenarios (also build the deduped `used` set).
+interface Scenario {
+  name: string;
+  steps: string[];
+}
+const scenarios: Scenario[] = [];
 const used = new Map<string, string[]>();
+const featuresDir = `${root}/features`;
 if (existsSync(featuresDir)) {
   for (const f of readdirSync(featuresDir).filter((f) => f.endsWith(".feature"))) {
+    let cur: Scenario | null = null;
     for (const line of readFileSync(`${featuresDir}/${f}`, "utf8").split("\n")) {
+      const sc = /^\s*Scenario:\s*(.+)$/.exec(line);
+      if (sc) {
+        cur = { name: sc[1].trim(), steps: [] };
+        scenarios.push(cur);
+        continue;
+      }
       const m = /^\s*(Given|When|Then|And|But|\*)\s+(.+)$/.exec(line);
       if (m) {
         const s = m[2].trim();
+        if (cur) cur.steps.push(s);
         if (!used.has(s)) used.set(s, []);
         used.get(s)!.push(f);
       }
@@ -74,3 +89,23 @@ for (const [step] of used) {
     }
   }
 }
+
+// Synthetic run: every step is assumed to pass (evidence = rendered command).
+// Exercises the ledger + summary report on the real corpus before a browser
+// is involved.
+const ledger: RunLedger = { scenarios: [], records: [] };
+for (const sc of scenarios) {
+  ledger.scenarios.push(sc.name);
+  const concrete = sc.steps.flatMap((s) => expandStep(s, defs));
+  concrete.forEach((step, i) => {
+    ledger.records.push({
+      scenario: sc.name,
+      stepIndex: i,
+      step,
+      verdict: "success",
+      evidence: (renderStep(step, { baseUrl }) ?? ["undefined"])[0],
+    });
+  });
+}
+console.log("\n# synthetic run (all steps assumed to pass):");
+console.log(report(ledger, { mode: "summary" }));
