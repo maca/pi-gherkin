@@ -39,8 +39,32 @@ export function scenarioVerdict(records: StopRecord[]): Verdict {
 }
 
 export interface ReportOptions {
-  mode: "summary" | "trace";
+  mode: "summary" | "trace" | "actionable";
 }
+
+export type ScenarioOutcome = Verdict | BugStatus;
+
+/** Bug-aware scenario outcome: bugStatus when the scenario is a bug-repro. */
+export function scenarioOutcome(records: StopRecord[]): ScenarioOutcome {
+  return bugStatus(records) ?? scenarioVerdict(records);
+}
+
+function recordLines(r: StopRecord): string[] {
+  const lines = [`  [${r.verdict}] step ${r.stepIndex}: ${r.step}`];
+  lines.push(`      evidence: ${r.evidence}`);
+  if (r.divergence) lines.push(`      divergence: ${r.divergence}`);
+  return lines;
+}
+
+const OUTCOME_LABELS: ScenarioOutcome[] = [
+  "success",
+  "fail",
+  "skip",
+  "error",
+  "reproduced",
+  "fixed",
+  "drift",
+];
 
 export function report(ledger: RunLedger, opts: ReportOptions): string {
   const byScenario = new Map<string, StopRecord[]>();
@@ -48,20 +72,39 @@ export function report(ledger: RunLedger, opts: ReportOptions): string {
     if (!byScenario.has(r.scenario)) byScenario.set(r.scenario, []);
     byScenario.get(r.scenario)!.push(r);
   }
+  const outcome = (s: string) => scenarioOutcome(byScenario.get(s) ?? []);
+
+  // actionable: header counts + blocks for every non-passing scenario.
+  if (opts.mode === "actionable") {
+    const parts = OUTCOME_LABELS.filter((o) => ledger.scenarios.some((s) => outcome(s) === o)).map(
+      (o) => `${ledger.scenarios.filter((s) => outcome(s) === o).length} ${o}`,
+    );
+    const lines = [`# ${ledger.scenarios.length} scenarios · ${parts.join(" · ")}`];
+    for (const s of ledger.scenarios) {
+      if (outcome(s) === "success") continue;
+      lines.push(`scenario ${s}  ->  ${outcome(s)}`);
+      for (const r of byScenario.get(s) ?? []) {
+        const trivial = r.mode !== "inverted" && r.verdict === "success";
+        if (!trivial) lines.push(...recordLines(r));
+      }
+    }
+    return lines.join("\n");
+  }
+
   const lines: string[] = [];
   for (const s of ledger.scenarios) {
     const recs = byScenario.get(s) ?? [];
-    const verdict = scenarioVerdict(recs);
+    const o = outcome(s);
     if (opts.mode === "summary") {
-      const failing = recs.find((r) => r.verdict === "fail");
-      lines.push(`${s}  ${verdict}${failing ? `  (${failing.step})` : ""}`);
-    } else {
-      lines.push(`scenario: ${s}  -> ${verdict}`);
-      for (const r of recs) {
-        lines.push(`  [${r.verdict}] step ${r.stepIndex}: ${r.step}`);
-        lines.push(`      evidence: ${r.evidence}`);
-        if (r.divergence) lines.push(`      divergence: ${r.divergence}`);
+      if (o === "fail") {
+        const failing = recs.find((r) => r.verdict === "fail");
+        lines.push(`${s}  ${o}${failing ? `  (${failing.step})` : ""}`);
+      } else {
+        lines.push(`${s}  ${o}`);
       }
+    } else {
+      lines.push(`scenario: ${s}  -> ${o}`);
+      for (const r of recs) lines.push(...recordLines(r));
     }
   }
   return lines.join("\n");

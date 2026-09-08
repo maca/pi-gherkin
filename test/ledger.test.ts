@@ -115,3 +115,37 @@ test("bugStatus: drift when the actual branch fails", () => {
     "drift",
   );
 });
+
+test("summary report shows bug-repro status instead of raw fail", () => {
+  const ledger = {
+    scenarios: ["s1"],
+    records: [
+      rec("s1", 0, "actual", "success", "A", undefined, "holds"),
+      rec("s1", 1, "expected", "fail", "B", "div", "inverted"),
+    ],
+  };
+  const out = report(ledger, { mode: "summary" });
+  assert.match(out, /s1\s+reproduced/);
+});
+
+test("actionable report: header counts and blocks for failures, bugs, drifts only", () => {
+  const ledger = {
+    scenarios: ["good", "bad", "bug1"],
+    records: [
+      rec("good", 0, "ok1", "success", "e"),
+      rec("bad", 0, "x", "fail", "obs", "expected X observed Y"),
+      rec("bug1", 0, "actual", "success", "A", undefined, "holds"),
+      rec("bug1", 1, "expected", "fail", "B", "div", "inverted"),
+    ],
+  };
+  const out = report(ledger, { mode: "actionable" });
+  assert.match(out, /3 scenarios/);
+  assert.match(out, /1 success/);
+  assert.match(out, /1 fail/);
+  assert.match(out, /1 reproduced/);
+  assert.match(out, /scenario bad/);
+  assert.match(out, /->\s+reproduced/);
+  assert.match(out, /divergence: div/);
+  assert.doesNotMatch(out, /scenario good/); // passing scenario has no block
+  assert.doesNotMatch(out, /ok1/); // its records are omitted
+});

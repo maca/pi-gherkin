@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { runScenario, type Judge } from "../src/scenario.ts";
 import type { Runner } from "../src/executor.ts";
+import type { Step } from "../src/expand.ts";
 
 function fakeRun(
   script: Record<string, { code?: number; stdout?: string; stderr?: string }>,
@@ -17,11 +18,13 @@ function fakeRun(
 const ok: Judge = () => "success";
 const fail: Judge = () => "fail";
 
-const steps = [
-  'I click "A"',
-  'I should see the message "Hi"',
-  'I click "B"',
-  'I should see the message "Bye"',
+const st = (text: string, mode: Step["mode"] = "holds"): Step => ({ text, mode });
+
+const steps: Step[] = [
+  st('I click "A"'),
+  st('I should see the message "Hi"'),
+  st('I click "B"'),
+  st('I should see the message "Bye"'),
 ];
 
 test("drives actions and records a verdict at each observe stop", async () => {
@@ -70,7 +73,7 @@ test("onFail continue collects all failures", async () => {
 
 test("action execution error aborts with an error verdict", async () => {
   const log: string[] = [];
-  const records = await runScenario(['I click "A"', 'I should see the message "Hi"'], {
+  const records = await runScenario([st('I click "A"'), st('I should see the message "Hi"')], {
     run: fakeRun({ 'agent-browser find text "A" click': { code: 1, stderr: "boom" } }, log),
     baseUrl: "http://b/",
     judge: ok,
@@ -82,7 +85,7 @@ test("action execution error aborts with an error verdict", async () => {
 });
 
 test("undefined step aborts with an error verdict", async () => {
-  const records = await runScenario(["frobnicate"], {
+  const records = await runScenario([st("frobnicate")], {
     run: fakeRun({}, []),
     baseUrl: "http://b/",
     judge: ok,
@@ -91,4 +94,19 @@ test("undefined step aborts with an error verdict", async () => {
   assert.equal(records.length, 1);
   assert.equal(records[0].verdict, "error");
   assert.match(records[0].divergence ?? "", /no core/i);
+});
+
+test("records the step's checking mode on stop records", async () => {
+  const records = await runScenario(
+    [st('I click "A"'), st('I should see the message "Hi"', "inverted")],
+    {
+      run: fakeRun({}, []),
+      baseUrl: "http://b/",
+      judge: ok,
+      scenario: "s",
+    },
+  );
+  assert.equal(records.length, 1);
+  assert.equal(records[0].mode, "inverted");
+  assert.equal(records[0].step, 'I should see the message "Hi"');
 });

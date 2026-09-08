@@ -8,6 +8,7 @@
 // always halt (the machine cannot continue deterministically).
 
 import { executeStep, type Runner, type StepOutcome } from "./executor.ts";
+import type { Step } from "./expand.ts";
 import type { StopRecord, Verdict } from "./ledger.ts";
 
 export type Judge = (
@@ -27,21 +28,28 @@ export interface RunOptions {
 }
 
 export async function runScenario(
-  steps: string[],
+  steps: Step[],
   opts: RunOptions,
 ): Promise<StopRecord[]> {
   const records: StopRecord[] = [];
   const onFail = opts.onFail ?? "continue";
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
-    const out = await executeStep(step, { run: opts.run, baseUrl: opts.baseUrl }, i);
+    const out = await executeStep(step.text, { run: opts.run, baseUrl: opts.baseUrl }, i);
     opts.onStep?.(out);
     switch (out.kind) {
       case "action":
         continue;
       case "observe": {
-        const verdict = await opts.judge(step, out.evidence, out.code);
-        records.push({ scenario: opts.scenario, stepIndex: i, step, verdict, evidence: out.evidence });
+        const verdict = await opts.judge(step.text, out.evidence, out.code);
+        records.push({
+          scenario: opts.scenario,
+          stepIndex: i,
+          step: step.text,
+          verdict,
+          evidence: out.evidence,
+          mode: step.mode,
+        });
         if (verdict === "fail" && onFail === "stop") return records;
         if (verdict === "error") return records;
         continue;
@@ -50,19 +58,21 @@ export async function runScenario(
         records.push({
           scenario: opts.scenario,
           stepIndex: i,
-          step,
+          step: step.text,
           verdict: "error",
           evidence: "",
           divergence: "no core verb or definition (add a def or extend the core)",
+          mode: step.mode,
         });
         return records;
       case "error":
         records.push({
           scenario: opts.scenario,
           stepIndex: i,
-          step,
+          step: step.text,
           verdict: "error",
           evidence: out.error,
+          mode: step.mode,
         });
         return records;
     }

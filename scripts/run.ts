@@ -8,7 +8,7 @@
 import { exec } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { parseDefinitions } from "../src/parse.ts";
-import { expandStep } from "../src/expand.ts";
+import { expandSteps } from "../src/expand.ts";
 import { runScenario, type Judge } from "../src/scenario.ts";
 import { report, type RunLedger } from "../src/ledger.ts";
 import type { Runner } from "../src/executor.ts";
@@ -51,7 +51,7 @@ async function main() {
   const { name, steps } = firstScenario(
     readFileSync(`${root}/features/order.feature`, "utf8"),
   );
-  const concrete = steps.flatMap((s) => expandStep(s, defs));
+  const concrete = steps.flatMap((s) => expandSteps(s, defs));
 
   const judge: Judge = (_step, _evidence, code) => (code === 0 ? "success" : "fail");
 
