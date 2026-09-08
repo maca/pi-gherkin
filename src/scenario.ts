@@ -10,6 +10,7 @@
 import { executeStep, type Runner, type StepOutcome } from "./executor.ts";
 import type { Step } from "./expand.ts";
 import type { StopRecord, Verdict } from "./ledger.ts";
+import type { Definition } from "./parse.ts";
 
 export type Judge = (
   step: string,
@@ -25,6 +26,8 @@ export interface RunOptions {
   onFail?: "stop" | "continue";
   /** Observability hook, called after each step is executed. */
   onStep?: (outcome: StepOutcome) => void;
+  /** Project step: leaf definitions, tried when no core verb matches. */
+  defs?: Definition[];
 }
 
 export async function runScenario(
@@ -35,7 +38,11 @@ export async function runScenario(
   const onFail = opts.onFail ?? "continue";
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
-    const out = await executeStep(step.text, { run: opts.run, baseUrl: opts.baseUrl }, i);
+    const out = await executeStep(
+      step.text,
+      { run: opts.run, baseUrl: opts.baseUrl, defs: opts.defs },
+      i,
+    );
     opts.onStep?.(out);
     switch (out.kind) {
       case "action":

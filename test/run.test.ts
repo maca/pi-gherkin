@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { runScenario, type Judge } from "../src/scenario.ts";
 import type { Runner } from "../src/executor.ts";
 import type { Step } from "../src/expand.ts";
+import { parseDefinitions } from "../src/parse.ts";
 
 function fakeRun(
   script: Record<string, { code?: number; stdout?: string; stderr?: string }>,
@@ -94,6 +95,25 @@ test("undefined step aborts with an error verdict", async () => {
   assert.equal(records.length, 1);
   assert.equal(records[0].verdict, "error");
   assert.match(records[0].divergence ?? "", /no core/i);
+});
+
+test("drives a leaf via the defs option when a step matches no core verb", async () => {
+  const defs = parseDefinitions(`
+step: the browser storage is empty
+  \`\`\`js
+  localStorage.clear();
+  \`\`\`
+`);
+  const log: string[] = [];
+  const records = await runScenario([st("the browser storage is empty")], {
+    run: fakeRun({}, log),
+    baseUrl: "http://b/",
+    judge: ok,
+    scenario: "s",
+    defs,
+  });
+  assert.equal(records.length, 0); // action leaves are not stop-points
+  assert.match(log[0], /^agent-browser eval --base64 /);
 });
 
 test("records the step's checking mode on stop records", async () => {

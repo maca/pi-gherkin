@@ -121,12 +121,12 @@ Two channels, least-power first:
 3. ` ```js ` — evaluated in-page via agent-browser eval; last expression is the result.
 4. ` ```bash ` — evaluated locally from the project root; JSON on stdout is the result.
 
-**Current limitation:** code-leaf execution is defined and validated
-(`parseDefinitions`/`validateDefinitions` accept and check these bodies)
-but the runner does not yet execute them end to end — wiring that in is
-tracked as its own piece of work. Until then, write scenarios that stay
-within the core-verb + Composite: vocabulary for anything you intend to
-actually run live.
+A code leaf always executes as the **action** phase — it seeds or mutates
+state, it is never itself a judged `Then`; a non-zero exit aborts the run
+with an error, exactly like any other action. ` ```js ` bodies run via
+`agent-browser eval --base64 ...` (placeholders substituted first, then
+base64-encoded — sidesteps shell-escaping entirely); ` ```bash ` bodies run
+as-is, verbatim, from the project root.
 
 ## Authoring-time lint
 

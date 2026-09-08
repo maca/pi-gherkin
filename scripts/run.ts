@@ -62,6 +62,7 @@ async function main() {
     judge,
     scenario: name,
     onFail: "continue",
+    defs,
     onStep: (out) => {
       if (out.kind === "action") console.log(`  ok    ${out.step}`);
       else if (out.kind === "observe")

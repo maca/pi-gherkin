@@ -9,6 +9,8 @@
 //              the agent judges the Then, the executor only gathers state.
 
 import { resolve } from "./core.ts";
+import { resolveLeaf } from "./leaf.ts";
+import type { Definition } from "./parse.ts";
 
 export type Runner = (cmd: string) => Promise<{
   code: number;
@@ -19,6 +21,8 @@ export type Runner = (cmd: string) => Promise<{
 export interface ExecContext {
   run: Runner;
   baseUrl: string;
+  /** Project step: leaf definitions, tried when no core verb matches. */
+  defs?: Definition[];
 }
 
 export type StepOutcome =
@@ -33,15 +37,21 @@ export async function executeStep(
   index = 0,
 ): Promise<StepOutcome> {
   const r = resolve(step, ctx);
-  if (!r) return { kind: "undefined", index, step };
+  const leaf = !r && ctx.defs ? resolveLeaf(step, ctx.defs) : null;
+  if (!r && !leaf) return { kind: "undefined", index, step };
+
+  // A code leaf is always the "action" phase: it seeds/mutates state, it is
+  // never itself a judged Then.
+  const phase = r?.phase ?? "action";
+  const commands = r?.commands ?? [leaf!.command];
 
   let code = 0;
   let evidence = "";
-  for (const cmd of r.commands) {
+  for (const cmd of commands) {
     const res = await ctx.run(cmd);
     code = res.code;
     evidence = (evidence ? evidence + "\n" : "") + (res.stdout || res.stderr);
-    if (res.code !== 0 && r.phase === "action") {
+    if (res.code !== 0 && phase === "action") {
       return {
         kind: "error",
         index,
@@ -50,6 +60,6 @@ export async function executeStep(
       };
     }
   }
-  if (r.phase === "observe") return { kind: "observe", index, step, evidence, code };
-  return { kind: "action", index, step, commands: r.commands, code };
+  if (phase === "observe") return { kind: "observe", index, step, evidence, code };
+  return { kind: "action", index, step, commands, code };
 }
