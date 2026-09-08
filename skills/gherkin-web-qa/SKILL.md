@@ -185,6 +185,15 @@ A full human-facing record (every step, every scenario) is persisted as a
 `qa-run` transcript entry — that's for the person reading the session, not
 for you to re-derive or repeat back.
 
+## Between scenarios
+
+When a feature has more than one `Scenario:`, the harness resets state
+between them — reopens the base URL and clears `sessionStorage`/`localStorage`
+— before driving the next one (not before the first; its own `Given` steps
+establish the starting state). Write each scenario's setup as if the browser
+starts fresh, because it will: don't rely on a previous scenario having left
+you logged in or mid-flow.
+
 ## Writing a new scenario
 
 1. Check what already exists — `features/steps/*.steps` — before adding a
