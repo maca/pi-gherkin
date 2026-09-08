@@ -28,6 +28,7 @@ export interface RunLedger {
 const PRECEDENCE: Verdict[] = ["fail", "error", "skip", "success"];
 
 export function scenarioVerdict(records: StopRecord[]): Verdict {
+  if (records.length === 0) return "skip"; // never evaluated
   const seen = new Set(records.map((r) => r.verdict));
   for (const v of PRECEDENCE) if (seen.has(v)) return v;
   return "success";

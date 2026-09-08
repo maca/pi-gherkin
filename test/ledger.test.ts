@@ -44,6 +44,10 @@ test("precedence: fail > error > skip > success", () => {
   );
 });
 
+test("a scenario with no records is skip, not success", () => {
+  assert.equal(scenarioVerdict([]), "skip");
+});
+
 test("summary report: one line per scenario, first failing step on fail", () => {
   const ledger = {
     scenarios: ["s1", "s2"],
