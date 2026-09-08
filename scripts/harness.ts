@@ -12,6 +12,7 @@ import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { parseDefinitions } from "../src/parse.ts";
 import { matchPattern } from "../src/match.ts";
 import { renderStep } from "../src/core.ts";
+import { validateDefinitions } from "../src/validate.ts";
 
 const root = process.argv[2] ?? ".";
 const baseUrl = "http://127.0.0.1:8099/";
@@ -25,6 +26,12 @@ const defs = existsSync(stepsDir)
 
 console.log(`# definitions: ${defs.length}  (features/steps/)`);
 for (const d of defs) console.log(`  [${d.kind}] ${d.pattern}`);
+
+const violations = validateDefinitions(defs);
+if (violations.length) {
+  console.log(`\n# violations: ${violations.length}`);
+  for (const v of violations) console.log(`  !! ${v.pattern} — ${v.message}`);
+}
 
 const featuresDir = `${root}/features`;
 const used = new Map<string, string[]>();
