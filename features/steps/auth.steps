@@ -1,0 +1,12 @@
+# Auth step definitions — Acme demo project vocabulary.
+#
+# `Composite:` = a pure group of step references (expanded at plan time).
+# The body must contain only Gherkin steps. Leaves (`step:`) carry run ops
+# or code blocks. See skills/gherkin-web-qa/SKILL.md.
+
+Composite: the user "{name}" is logged in
+  When I open the page "index.html"
+  And I fill the "username" field with "{name}"
+  And I fill the "password" field with "secret"
+  And I click "Sign In"
+  Then I should be on the dashboard

@@ -1,0 +1,31 @@
+# Code-block step definitions — deliberate, visible black-box escapes.
+#
+#   ```js    evaluated IN-PAGE via agent-browser eval (last expression = result)
+#   ```bash  evaluated LOCALLY from the project root (JSON on stdout = result)
+#
+# Result convention: JSON (or empty). The runner captures and reports it.
+# Least-power ladder: prefer UI steps, then agent-browser natives
+# (cookies/storage/set), then ```js in-page, then ```bash local.
+
+step: the browser storage is empty
+  ```js
+  sessionStorage.clear();
+  localStorage.clear();
+  ({ cleared: true })
+  ```
+
+step: the api accepts order "{id}"
+  ```bash
+  curl -s -X POST http://127.0.0.1:8000/orders \
+    -H 'content-type: application/json' \
+    -d '{"id": "{id}", "status": "accepted"}'
+  ```
+
+step: the cart holds "{item}" for "{name}"
+  ```js
+  const key = 'cart:' + {name};
+  const cart = JSON.parse(localStorage.getItem(key) || '[]');
+  cart.push({item});
+  localStorage.setItem(key, JSON.stringify(cart));
+  ({ [key]: cart })
+  ```
