@@ -1,13 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { expandStep, type ExpandTrace } from "../src/expand.ts";
-import type { Definition } from "../src/parse.ts";
+import { expandStep, expandSteps, type ExpandTrace } from "../src/expand.ts";
+import type { Definition, Mode } from "../src/parse.ts";
 
-const def = (kind: Definition["kind"], pattern: string, body: string[]): Definition => ({
-  kind,
-  pattern,
-  body,
-});
+const def = (
+  kind: Definition["kind"],
+  pattern: string,
+  body: string[],
+  mode: Mode = "holds",
+): Definition => ({ kind, pattern, body, mode });
 
 test("expands a composite, substituting params and stripping keywords", () => {
   const defs = [
@@ -65,4 +66,35 @@ test("records an expansion trace", () => {
     via: 'the user "{name}" is logged in',
     to: ['I open the page "index.html"'],
   });
+});
+
+test("expandSteps marks inverted composite steps inverted", () => {
+  const defs = [
+    def("composite", "the expected behavior is observed", ["Then I should see exactly one message"], "inverted"),
+  ];
+  assert.deepEqual(expandSteps("the expected behavior is observed", defs), [
+    { text: "I should see exactly one message", mode: "inverted" },
+  ]);
+});
+
+test("expandSteps defaults to holds and inherits through unmarked nesting", () => {
+  const defs = [
+    def("composite", "outer", ["And inner"]),
+    def("composite", "inner", ['And I click "X"']),
+  ];
+  assert.deepEqual(expandSteps("outer", defs), [{ text: 'I click "X"', mode: "holds" }]);
+});
+
+test("inverted propagates through nested unmarked composites", () => {
+  const defs = [
+    def("composite", "outer", ["And inner"], "inverted"),
+    def("composite", "inner", ['And I click "X"']),
+  ];
+  assert.deepEqual(expandSteps("outer", defs), [{ text: 'I click "X"', mode: "inverted" }]);
+});
+
+test("non-composite steps inherit the parent mode", () => {
+  assert.deepEqual(expandSteps('I click "X"', [], "inverted"), [
+    { text: 'I click "X"', mode: "inverted" },
+  ]);
 });

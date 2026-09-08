@@ -4,6 +4,7 @@ import {
   scenarioVerdict,
   report,
   reportJson,
+  bugStatus,
   type StopRecord,
 } from "../src/ledger.ts";
 
@@ -14,7 +15,8 @@ const rec = (
   verdict: StopRecord["verdict"],
   evidence: string,
   divergence?: string,
-): StopRecord => ({ scenario, stepIndex, step, verdict, evidence, divergence });
+  mode?: StopRecord["mode"],
+): StopRecord => ({ scenario, stepIndex, step, verdict, evidence, divergence, mode });
 
 test("scenario verdict: all success", () => {
   assert.equal(
@@ -78,4 +80,38 @@ test("trace report: one block per record with evidence and divergence", () => {
 test("reportJson returns the raw records", () => {
   const records = [rec("s1", 0, "a", "success", "ok")];
   assert.deepEqual(reportJson({ scenarios: ["s1"], records }), records);
+});
+
+test("bugStatus: null when there are no inverted records", () => {
+  assert.equal(bugStatus([rec("s1", 0, "a", "success", "ok")]), null);
+});
+
+test("bugStatus: reproduced when actual holds and inverted diverges", () => {
+  assert.equal(
+    bugStatus([
+      rec("s", 0, "actual", "success", "A", undefined, "holds"),
+      rec("s", 1, "expected", "fail", "B", "div", "inverted"),
+    ]),
+    "reproduced",
+  );
+});
+
+test("bugStatus: fixed when the inverted branch holds", () => {
+  assert.equal(
+    bugStatus([
+      rec("s", 0, "actual", "success", "A", undefined, "holds"),
+      rec("s", 1, "expected", "success", "B", undefined, "inverted"),
+    ]),
+    "fixed",
+  );
+});
+
+test("bugStatus: drift when the actual branch fails", () => {
+  assert.equal(
+    bugStatus([
+      rec("s", 0, "actual", "fail", "A", "d", "holds"),
+      rec("s", 1, "expected", "fail", "B", "d", "inverted"),
+    ]),
+    "drift",
+  );
 });

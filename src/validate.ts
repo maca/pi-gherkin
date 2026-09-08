@@ -35,11 +35,19 @@ export function validateDefinitions(defs: Definition[]): Violation[] {
       if (d.body.length === 0) {
         out.push({ pattern: d.pattern, message: "Composite has an empty body" });
       }
-    } else if (hasSteps) {
-      out.push({
-        pattern: d.pattern,
-        message: "Leaf has a Gherkin body — use Composite: instead",
-      });
+    } else {
+      if (d.mode === "inverted") {
+        out.push({
+          pattern: d.pattern,
+          message: "[inverted] is only valid on Composite: (leaves are concrete, not branches)",
+        });
+      }
+      if (hasSteps) {
+        out.push({
+          pattern: d.pattern,
+          message: "Leaf has a Gherkin body — use Composite: instead",
+        });
+      }
     }
   }
   return out;

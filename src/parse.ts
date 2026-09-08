@@ -15,15 +15,21 @@
 
 export type DefinitionKind = "composite" | "leaf";
 
+/** Checking mode for a definition's steps: must hold, or expected to fail. */
+export type Mode = "holds" | "inverted";
+
 export interface Definition {
   kind: DefinitionKind;
   /** The step pattern, e.g. `the user "{name}" is logged in` */
   pattern: string;
   /** Raw body lines (indentation stripped, fences kept) */
   body: string[];
+  /** `[inverted]` on the header = "checked-but-inverted" (expected to fail). */
+  mode: Mode;
 }
 
 const HEADER = /^(Composite|step)\s*:\s*(.*)$/i;
+const ANNOT = /\[(inverted|holds)\]\s*$/i;
 const FENCE = /^```/;
 
 export function parseDefinitions(text: string): Definition[] {
@@ -50,10 +56,18 @@ export function parseDefinitions(text: string): Definition[] {
       const m = HEADER.exec(raw);
       if (m) {
         if (cur) entries.push(cur);
+        let pattern = m[2].trim();
+        let mode: Mode = "holds";
+        const am = ANNOT.exec(pattern);
+        if (am) {
+          mode = am[1].toLowerCase() === "inverted" ? "inverted" : "holds";
+          pattern = pattern.slice(0, am.index).trim();
+        }
         cur = {
           kind: m[1].toLowerCase() === "composite" ? "composite" : "leaf",
-          pattern: m[2].trim(),
+          pattern,
           body: [],
+          mode,
         };
         inFence = false;
         continue;

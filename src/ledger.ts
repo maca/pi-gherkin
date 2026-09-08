@@ -8,6 +8,8 @@
 
 export type Verdict = "success" | "fail" | "skip" | "error";
 
+import type { Mode } from "./parse.ts";
+
 export interface StopRecord {
   scenario: string;
   stepIndex: number;
@@ -17,6 +19,8 @@ export interface StopRecord {
   evidence: string;
   /** Expected-vs-observed divergence on a fail. */
   divergence?: string;
+  /** Checking mode: holds (default) or inverted (expected to fail). */
+  mode?: Mode;
 }
 
 export interface RunLedger {
@@ -65,4 +69,23 @@ export function report(ledger: RunLedger, opts: ReportOptions): string {
 
 export function reportJson(ledger: RunLedger): StopRecord[] {
   return ledger.records;
+}
+
+/** Bug-repro status for a scenario's records, or null when it isn't one.
+ *
+ *   reproduced ⇔ actual holds ∧ inverted diverges   (claims correct: bug present)
+ *   fixed      ⇔ inverted holds                     (claims correct: bug gone)
+ *   drift      ⇔ actual fails                       (claims wrong: report stale)
+ */
+export type BugStatus = "reproduced" | "fixed" | "drift";
+
+export function bugStatus(records: StopRecord[]): BugStatus | null {
+  const inverted = records.filter((r) => r.mode === "inverted");
+  if (inverted.length === 0) return null;
+  const actualFail = records.some(
+    (r) => r.mode !== "inverted" && (r.verdict === "fail" || r.verdict === "error"),
+  );
+  if (actualFail) return "drift";
+  if (inverted.some((r) => r.verdict === "success")) return "fixed";
+  return "reproduced";
 }

@@ -1,0 +1,12 @@
+# Bug 999 step definitions — the two branches.
+#
+# `the actual behavior is observed`   = buggy reality (must hold).
+# `the expected behavior is observed` = intended reality, marked [inverted]
+#                                       so it is expected to FAIL while the
+#                                       bug is present (checked-but-inverted).
+
+Composite: the actual behavior is observed
+  Then I should see the message "Honky dory!"
+
+Composite: the expected behavior is observed   [inverted]
+  Then I should see the message "All good!"

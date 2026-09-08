@@ -44,6 +44,13 @@ test("leaf with a Gherkin body is a violation (use Composite:)", () => {
   assert.match(v[0].message, /Composite/);
 });
 
+test("leaf marked [inverted] is a violation", () => {
+  const text = ["step: do it [inverted]", "  run: click X"].join("\n");
+  const v = validateDefinitions(parseDefinitions(text));
+  assert.equal(v.length, 1);
+  assert.match(v[0].message, /Composite/);
+});
+
 test("leaf with run ops or code is valid", () => {
   const text = ["step: seed it", "  run: click X", "  ```js", "  y()", "  ```"].join("\n");
   assert.deepEqual(validateDefinitions(parseDefinitions(text)), []);

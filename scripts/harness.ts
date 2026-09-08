@@ -13,8 +13,8 @@ import { parseDefinitions } from "../src/parse.ts";
 import { matchPattern } from "../src/match.ts";
 import { renderStep } from "../src/core.ts";
 import { validateDefinitions } from "../src/validate.ts";
-import { expandStep } from "../src/expand.ts";
-import { report, type RunLedger } from "../src/ledger.ts";
+import { expandStep, expandSteps } from "../src/expand.ts";
+import { report, bugStatus, type RunLedger } from "../src/ledger.ts";
 
 const root = process.argv[2] ?? ".";
 const baseUrl = "http://127.0.0.1:8099/";
@@ -90,22 +90,29 @@ for (const [step] of used) {
   }
 }
 
-// Synthetic run: every step is assumed to pass (evidence = rendered command).
-// Exercises the ledger + summary report on the real corpus before a browser
-// is involved.
+// Synthetic run: holds steps pass, inverted steps fail (the buggy reality).
+// Exercises the ledger + summary + bug-repro derivation on the real corpus.
 const ledger: RunLedger = { scenarios: [], records: [] };
 for (const sc of scenarios) {
   ledger.scenarios.push(sc.name);
-  const concrete = sc.steps.flatMap((s) => expandStep(s, defs));
-  concrete.forEach((step, i) => {
+  const concrete = sc.steps.flatMap((s) => expandSteps(s, defs));
+  concrete.forEach((st, i) => {
+    const inverted = st.mode === "inverted";
     ledger.records.push({
       scenario: sc.name,
       stepIndex: i,
-      step,
-      verdict: "success",
-      evidence: (renderStep(step, { baseUrl }) ?? ["undefined"])[0],
+      step: st.text,
+      verdict: inverted ? "fail" : "success",
+      evidence: (renderStep(st.text, { baseUrl }) ?? ["undefined"])[0],
+      mode: st.mode,
+      divergence: inverted ? "(synthetic: inverted branch expected to diverge)" : undefined,
     });
   });
 }
-console.log("\n# synthetic run (all steps assumed to pass):");
+console.log("\n# synthetic run (holds pass, inverted fail):");
 console.log(report(ledger, { mode: "summary" }));
+for (const sc of scenarios) {
+  const recs = ledger.records.filter((r) => r.scenario === sc.name);
+  const bs = bugStatus(recs);
+  if (bs) console.log(`  bug status: ${sc.name} -> ${bs}`);
+}
