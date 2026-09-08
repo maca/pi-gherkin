@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Dashboard</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 30rem; margin: 4rem auto; }
+    label { display: block; margin: .75rem 0 .25rem; }
+    input, button { font-size: 1rem; padding: .4rem .6rem; }
+    #result { margin-top: 1rem; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>Dashboard</h1>
+  <p id="whoami">Welcome!</p>
+  <form id="order">
+    <label for="item">Item</label>
+    <input id="item" name="item" placeholder="Item name">
+    <p><button type="submit" id="submit-order">Submit Order</button></p>
+  </form>
+  <p id="result" hidden></p>
+  <script>
+    const user = sessionStorage.getItem('user');
+    if (!user) { location.replace('index.html'); throw new Error('not signed in'); }
+    document.getElementById('whoami').textContent = `Welcome, ${user}!`;
+    const form = document.getElementById('order');
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const item = document.getElementById('item').value.trim();
+      const result = document.getElementById('result');
+      result.hidden = false;
+      result.textContent = item ? `Honky dory! Ordered: ${item}.` : 'Honky dory!';
+    });
+  </script>
+</body>
+</html>

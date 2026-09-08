@@ -81,9 +81,26 @@ const VERBS: CoreVerb[] = [
 ];
 
 export function renderStep(step: string, ctx: RenderCtx = {}): string[] | null {
+  const r = resolve(step, ctx);
+  return r ? r.commands : null;
+}
+
+/** Resolve a concrete step to its phase + agent-browser commands, or null. */
+export function resolve(
+  step: string,
+  ctx: RenderCtx = {},
+): { phase: Phase; commands: string[] } | null {
   for (const verb of VERBS) {
     const params = matchPattern(verb.pattern, step);
-    if (params) return verb.render(params, ctx);
+    if (params) return { phase: verb.phase, commands: verb.render(params, ctx) };
+  }
+  return null;
+}
+
+/** Phase of a step (action | observe) or null if it matches no core verb. */
+export function phaseOf(step: string): Phase | null {
+  for (const verb of VERBS) {
+    if (matchPattern(verb.pattern, step) !== null) return verb.phase;
   }
   return null;
 }

@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "node --experimental-strip-types --test test/*.test.ts",
-    "harness": "node --experimental-strip-types scripts/harness.ts"
+    "harness": "node --experimental-strip-types scripts/harness.ts",
+    "run": "node --experimental-strip-types scripts/run.ts"
   }
 }

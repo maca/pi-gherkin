@@ -6,7 +6,7 @@
 
 Composite: the user "{name}" is logged in
   When I open the page "index.html"
-  And I fill the "username" field with "{name}"
-  And I fill the "password" field with "secret"
+  And I fill the "Username" field with "{name}"
+  And I fill the "Password" field with "secret"
   And I click "Sign In"
   Then I should be on the dashboard
