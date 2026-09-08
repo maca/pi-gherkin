@@ -128,12 +128,22 @@ tracked as its own piece of work. Until then, write scenarios that stay
 within the core-verb + Composite: vocabulary for anything you intend to
 actually run live.
 
+## Authoring-time lint
+
+- **`validate_steps {}`** — always available, independent of any run. Lints
+  every `features/steps/*.steps` file: purity (the `Composite:`/`step:`
+  split), duplicate pattern definitions, and `Composite:` body steps that
+  resolve to neither a core verb nor another definition (a dangling
+  reference — otherwise it only surfaces as UNDEFINED mid-run). Run this
+  after adding or editing a `.steps` file, before `qa_run`.
+
 ## Running a feature
 
-Three tools, always available as `qa_run`; the other two activate only
-while a run is in progress (guardrails, like pi-magit's rebase tools):
+Four tools; `validate_steps` and `qa_run` are always available, the other
+two activate only while a run is in progress (guardrails, like pi-magit's
+rebase tools):
 
-- **`qa_run { feature, baseUrl, onFail }`** — parses the feature +
+- **`qa_run { feature, baseUrl, onFail }` — parses the feature +
   `features/steps/*.steps`, validates purity, expands composites, and
   drives actions until the first `Then` stop-point. Returns a
   self-contained prompt: what was performed, the expected step, and the
