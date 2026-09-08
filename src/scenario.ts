@@ -1,0 +1,71 @@
+// Run state machine: "harness drives, agent judges."
+//
+// Drives a concrete (already-expanded) step list: actions execute straight
+// through, each observe step is a stop-point where evidence is handed to an
+// injected judge. The judge's verdict is recorded to the ledger. The onFail
+// toggle governs whether a `fail` verdict halts the scenario ("stop") or
+// collects all failures ("continue"). Execution errors and undefined steps
+// always halt (the machine cannot continue deterministically).
+
+import { executeStep, type Runner, type StepOutcome } from "./executor.ts";
+import type { StopRecord, Verdict } from "./ledger.ts";
+
+export type Judge = (
+  step: string,
+  evidence: string,
+  code: number,
+) => Verdict | Promise<Verdict>;
+
+export interface RunOptions {
+  run: Runner;
+  baseUrl: string;
+  judge: Judge;
+  scenario: string;
+  onFail?: "stop" | "continue";
+  /** Observability hook, called after each step is executed. */
+  onStep?: (outcome: StepOutcome) => void;
+}
+
+export async function runScenario(
+  steps: string[],
+  opts: RunOptions,
+): Promise<StopRecord[]> {
+  const records: StopRecord[] = [];
+  const onFail = opts.onFail ?? "continue";
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    const out = await executeStep(step, { run: opts.run, baseUrl: opts.baseUrl }, i);
+    opts.onStep?.(out);
+    switch (out.kind) {
+      case "action":
+        continue;
+      case "observe": {
+        const verdict = await opts.judge(step, out.evidence, out.code);
+        records.push({ scenario: opts.scenario, stepIndex: i, step, verdict, evidence: out.evidence });
+        if (verdict === "fail" && onFail === "stop") return records;
+        if (verdict === "error") return records;
+        continue;
+      }
+      case "undefined":
+        records.push({
+          scenario: opts.scenario,
+          stepIndex: i,
+          step,
+          verdict: "error",
+          evidence: "",
+          divergence: "no core verb or definition (add a def or extend the core)",
+        });
+        return records;
+      case "error":
+        records.push({
+          scenario: opts.scenario,
+          stepIndex: i,
+          step,
+          verdict: "error",
+          evidence: out.error,
+        });
+        return records;
+    }
+  }
+  return records;
+}

@@ -1,6 +1,7 @@
-// Real runner: drive the first scenario's steps through agent-browser until
-// the first Then stop-point, printing its evidence. (Agent judgment arrives
-// in the extension loop — here we stop and show what the harness observed.)
+// Real runner: drive the first scenario end-to-end through the run state
+// machine against live agent-browser. A deterministic auto-judge (exit code
+// 0 => success, else fail) stands in for the LLM judge until the pi extension
+// supplies the real stop-point handoff.
 //
 // Usage: BASE_URL=http://127.0.0.1:8100/ npm run run
 
@@ -8,7 +9,9 @@ import { exec } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { parseDefinitions } from "../src/parse.ts";
 import { expandStep } from "../src/expand.ts";
-import { executeStep, type Runner } from "../src/executor.ts";
+import { runScenario, type Judge } from "../src/scenario.ts";
+import { report, type RunLedger } from "../src/ledger.ts";
+import type { Runner } from "../src/executor.ts";
 
 const root = ".";
 const baseUrl = process.env.BASE_URL ?? "http://127.0.0.1:8099/";
@@ -25,46 +28,52 @@ const runner: Runner = (cmd) =>
     });
   });
 
-function firstScenarioSteps(text: string): string[] {
+function firstScenario(text: string): { name: string; steps: string[] } {
   const steps: string[] = [];
+  let name = "";
   let started = false;
   for (const line of text.split("\n")) {
-    if (/^\s*Scenario:/.test(line)) {
+    const sc = /^\s*Scenario:\s*(.+)$/.exec(line);
+    if (sc) {
       if (started) break;
       started = true;
+      name = sc[1].trim();
       continue;
     }
     if (!started) continue;
     const m = /^\s*(Given|When|Then|And|But|\*)\s+(.+)$/.exec(line);
     if (m) steps.push(m[2].trim());
   }
-  return steps;
+  return { name, steps };
 }
 
 async function main() {
-  const featureText = readFileSync(`${root}/features/order.feature`, "utf8");
-  const concrete = firstScenarioSteps(featureText).flatMap((s) => expandStep(s, defs));
+  const { name, steps } = firstScenario(
+    readFileSync(`${root}/features/order.feature`, "utf8"),
+  );
+  const concrete = steps.flatMap((s) => expandStep(s, defs));
 
-  console.log(`# concrete steps: ${concrete.length}  (baseUrl=${baseUrl})`);
-  for (let i = 0; i < concrete.length; i++) {
-    const out = await executeStep(concrete[i], { run: runner, baseUrl }, i);
-    switch (out.kind) {
-      case "action":
-        console.log(`  ok    ${out.step}`);
-        break;
-      case "observe":
-        console.log(`  stop  ${out.step}`);
-        console.log(`        evidence: ${JSON.stringify(out.evidence)}`);
-        return;
-      case "undefined":
-        console.log(`  UNDEFINED  ${out.step}`);
-        return;
-      case "error":
-        console.log(`  ERROR  ${out.step}\n         ${out.error}`);
-        return;
-    }
-  }
-  console.log("# done (no stop-point reached)");
+  const judge: Judge = (_step, _evidence, code) => (code === 0 ? "success" : "fail");
+
+  console.log(`# scenario: ${name}  (${concrete.length} concrete steps)`);
+  const records = await runScenario(concrete, {
+    run: runner,
+    baseUrl,
+    judge,
+    scenario: name,
+    onFail: "continue",
+    onStep: (out) => {
+      if (out.kind === "action") console.log(`  ok    ${out.step}`);
+      else if (out.kind === "observe")
+        console.log(`  stop  ${out.step}\n        ${JSON.stringify(out.evidence)}`);
+    },
+  });
+
+  const ledger: RunLedger = { scenarios: [name], records };
+  console.log("\n# report (summary):");
+  console.log(report(ledger, { mode: "summary" }));
+  console.log("\n# report (trace):");
+  console.log(report(ledger, { mode: "trace" }));
 }
 
 await main();
