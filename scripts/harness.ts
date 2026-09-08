@@ -13,6 +13,7 @@ import { parseDefinitions } from "../src/parse.ts";
 import { matchPattern } from "../src/match.ts";
 import { renderStep } from "../src/core.ts";
 import { validateDefinitions } from "../src/validate.ts";
+import { expandStep } from "../src/expand.ts";
 
 const root = process.argv[2] ?? ".";
 const baseUrl = "http://127.0.0.1:8099/";
@@ -59,4 +60,17 @@ for (const [step, files] of used) {
       : "UNDEFINED  (needs a def)";
   console.log(`  ${step}`);
   console.log(`      ${status}   (${files.join(", ")})`);
+}
+
+console.log(`\n# composite expansions (planning-time unroll):`);
+for (const [step] of used) {
+  const def = defs.find((d) => matchPattern(d.pattern, step));
+  if (def && def.kind === "composite") {
+    console.log(`  ${step}`);
+    for (const concrete of expandStep(step, defs)) {
+      const cmds = renderStep(concrete, { baseUrl });
+      console.log(`      - ${concrete}`);
+      console.log(`          ${cmds ? cmds[0] : "UNDEFINED"}`);
+    }
+  }
 }
