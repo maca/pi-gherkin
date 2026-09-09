@@ -154,9 +154,10 @@ as-is, verbatim, from the project root.
 
 ## Running a feature
 
-Five tools; `list_steps`, `validate_steps`, and `qa_run` are always
-available, the other two activate only while a run is in progress (guardrails, like pi-magit's
-rebase tools):
+Five tools, **all always available** — no dynamic activation. Run state is
+shared process-wide while tool visibility is per session, so a stop-point
+must be judgeable from any session and a wedged run must always be
+abortable (see recovery note under `qa_run`):
 
 - **`list_steps {}`** — the vocabulary truth: every core verb and every
   `features/steps/*.steps` definition, with bodies and `[inverted]` flags.
@@ -169,12 +170,20 @@ rebase tools):
   observed evidence (text + exit code). `onFail` (`stop` | `continue`,
   default `continue`) controls whether a `fail` verdict ends the scenario
   immediately or the harness keeps driving to record every divergence.
+  Only one run is enforced at a time per pi process. If `qa_run` reports a
+  run already in progress, either judge/abort it (see below) or wait — a
+  run left idle at a stop-point for more than ~2.5 min is treated as
+  abandoned and auto-discarded the next time a new `qa_run` starts, with a
+  `NOTE:` line in the result.
 - **`qa_judge { verdict, divergence? }`** — `success | fail | skip | error`.
   Judge only from the evidence you were handed — never from what you
   expect the app to do. On `fail`, include a one-line `divergence`
   (expected vs. observed). The harness records your verdict and drives to
   the next stop-point (or to `RUN COMPLETE`).
-- **`qa_abort`** — discard the in-progress run, no report.
+- **`qa_abort`** — discard the in-progress run, no report. Always available:
+  it is the recovery path when `qa_run` reports a run already in progress
+  (e.g. one started by a session that ended before judging its last
+  stop-point). Discarding is safe — just start the run again.
 
 An inverted stop-point (`mode: inverted`) is called out explicitly in the
 prompt: *"this branch is EXPECTED to fail while the bug is present."* Judge

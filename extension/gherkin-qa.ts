@@ -12,8 +12,20 @@
 // the *actionable* report (failures, bugs, drift — with evidence); the full
 // ledger is persisted as a `qa-run` transcript entry for the human.
 //
-// Tools: list_steps/validate_steps/qa_run (always) + qa_judge/qa_abort
-// (active only mid-run).
+// Tools: list_steps/validate_steps/qa_run/qa_judge/qa_abort — all five are
+// always registered AND always active. qa_judge/qa_abort no-op cleanly when
+// no run is pending.
+//
+// Deliberately no dynamic activation via setActiveTools. Run state (pending)
+// is process-wide module state shared by every session/subagent, while
+// setActiveTools applies only to the agent session that calls it and is
+// rebuilt from the base config at every session boundary (fork/reload/resume/
+// new subagent). Dynamically-activated guardrails therefore vanished for any
+// session that did not itself start the run, stranding it: qa_run blocked by
+// the shared pending, but qa_judge/qa_abort uncallable. Always-on guardrails
+// make judging/aborting possible from any session; pending additionally
+// self-heals (owner + last-activity heartbeat, stale-run auto-discard in
+// qa_run) so a run whose owning session died cannot wedge the queue.
 //
 // Self-contained: this file resolves the harness src/ from its own real
 // location (via import.meta.url + realpath), so it loads identically whether
@@ -37,8 +49,9 @@ import type { RunLedger, Verdict } from "../../src/ledger.ts";
 // The harness src/ sits beside this file's checkout (sibling of extension/).
 const SRC = join(dirname(realpathSync(fileURLToPath(import.meta.url))), "..", "src");
 
-const GUARDRAILS = ["qa_judge", "qa_abort"];
 const WIDGET_ID = "gherkin-qa";
+/** A stop-point left unjudged longer than this is treated as abandoned. */
+const RUN_STALE_MS = 150_000;
 
 interface ScenarioPlan {
   name: string;
@@ -65,6 +78,11 @@ interface PendingRun {
   baseUrl: string;
   /** step: leaf definitions, tried when a step matches no core verb. */
   defs: Definition[];
+  /** Session id that started the run ("unknown" when unavailable). */
+  owner: string;
+  startedAt: number;
+  /** Touched at every stop-point/verdict; staleness = now - lastActivity. */
+  lastActivity: number;
 }
 
 interface QaRunEntryData {
@@ -76,6 +94,12 @@ function outcomeColor(o: string): "success" | "error" | "warning" {
   if (o === "success" || o === "fixed") return "success";
   if (o === "skip" || o === "drift") return "warning";
   return "error"; // fail, error, reproduced
+}
+
+/** "12s" / "3m 5s" — elapsed wall-clock since the given ms timestamp. */
+function fmtAge(ms: number): string {
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
 let pending: PendingRun | null = null;
@@ -122,9 +146,13 @@ export default async function (pi: ExtensionAPI) {
 
   // ---- state lifecycle ---------------------------------------------------
 
+  // A main-session lifecycle boundary (startup/new/fork/resume/reload/
+  // shutdown) means the previous conversation — and any run it owned — is
+  // gone; clear the shared state so a fresh session starts unblocked. Note:
+  // background agent sessions do not fire these events, which is exactly why
+  // stale-run recovery below (qa_run auto-discard) also exists.
   const reset = (ui?: unknown) => {
     pending = null;
-    deactivateGuardrails(pi);
     paint(null, ui);
   };
   pi.on("session_start", (_event, ctx) => reset(ctx.ui));
@@ -204,6 +232,7 @@ export default async function (pi: ExtensionAPI) {
           continue;
         case "observe": {
           pr.stop = { index: out.index, step: out.step, mode: step.mode, evidence: out.evidence, code: out.code };
+          pr.lastActivity = Date.now();
           paint(pr, ui, "waiting for judgement");
           return stopReport(pr, performed);
         }
@@ -247,7 +276,6 @@ export default async function (pi: ExtensionAPI) {
   const finish = (pr: PendingRun, performed: string[], ui: unknown): string => {
     pr.stop = null;
     pending = null;
-    deactivateGuardrails(pi);
     paint(null, ui);
     // Persist the full ledger for the human (durable, not in LLM context).
     pi.appendEntry<QaRunEntryData>("qa-run", { feature: pr.feature, ledger: pr.ledger });
@@ -342,24 +370,49 @@ export default async function (pi: ExtensionAPI) {
     description:
       "Run a Gherkin feature against the live app via agent-browser (requires chrome-ctl start + the app served). " +
       "Parses, validates, and expands the feature, then drives actions until the first Then stop-point and returns an " +
-      "assessment prompt (expected step + observed evidence; inverted branches are flagged). Judge each stop-point with qa_judge.",
+      "assessment prompt (expected step + observed evidence; inverted branches are flagged). Judge each stop-point with qa_judge. " +
+      "A single run is enforced process-wide; qa_judge/qa_abort are always available to judge or discard it. A run left idle " +
+      "at a stop-point for >2.5 min is treated as abandoned and auto-discarded when a new qa_run starts.",
     parameters: Type.Object({
       feature: Type.Optional(Type.String({ description: "Path to .feature, default features/order.feature" })),
       baseUrl: Type.Optional(Type.String({ description: "App base URL, default http://127.0.0.1:8099/" })),
       onFail: Type.Optional(StringEnum(["stop", "continue"] as const)),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
+      const owner = ctx.sessionManager?.getSessionId?.() ?? "unknown";
+      let discarded: string | null = null;
       if (pending) {
-        return {
-          content: [{ type: "text", text: "A run is already in progress. Use qa_judge or qa_abort." }],
-          details: { error: true },
-        };
+        const idleMs = Date.now() - pending.lastActivity;
+        const stuck = pending.stop
+          ? `awaiting qa_judge at "${currentScenario(pending).name}" step ${pending.stop.index + 1}/${currentScenario(pending).steps.length}`
+          : `driving "${currentScenario(pending).name}"`;
+        if (idleMs < RUN_STALE_MS) {
+          return {
+            content: [{
+              type: "text",
+              text: [
+                "A run is already in progress.",
+                `  feature: ${pending.feature}`,
+                `  owner: ${pending.owner}  (started ${fmtAge(pending.startedAt)} ago, last activity ${fmtAge(pending.lastActivity)} ago)`,
+                `  status: ${stuck}`,
+                "",
+                "qa_judge/qa_abort are always available: judge the pending stop-point, or call qa_abort to discard this run.",
+                `A run idle for more than ${RUN_STALE_MS / 1000}s is auto-discarded when a new qa_run starts.`,
+              ].join("\n"),
+            }],
+            details: { error: true },
+          };
+        }
+        discarded = `Discarded stale run started by ${pending.owner} ${fmtAge(pending.startedAt)} ago (idle ${fmtAge(pending.lastActivity)} at ${stuck}).`;
+        pending = null;
+        paint(null, ctx.ui);
       }
+      const head = discarded ? `NOTE: ${discarded}\n\n` : "";
       const featurePath = join(ctx.cwd, params.feature ?? "features/order.feature");
       const baseUrl = params.baseUrl ?? "http://127.0.0.1:8099/";
       const onFail = params.onFail ?? "continue";
       if (!existsSync(featurePath)) {
-        return { content: [{ type: "text", text: `feature not found: ${featurePath}` }], details: { error: true } };
+        return { content: [{ type: "text", text: `${head}feature not found: ${featurePath}` }], details: { error: true } };
       }
       const defs = loadDefs(ctx.cwd);
       const violations = validateDefinitions(defs);
@@ -368,7 +421,7 @@ export default async function (pi: ExtensionAPI) {
         steps: sc.raw.flatMap((s) => expandSteps(s, defs)),
       }));
       if (scenarios.length === 0) {
-        return { content: [{ type: "text", text: "no scenarios found in feature" }], details: { error: true } };
+        return { content: [{ type: "text", text: `${head}no scenarios found in feature` }], details: { error: true } };
       }
       pending = {
         feature: featurePath,
@@ -380,15 +433,17 @@ export default async function (pi: ExtensionAPI) {
         onFail,
         baseUrl,
         defs,
+        owner,
+        startedAt: Date.now(),
+        lastActivity: Date.now(),
       };
-      activateGuardrails(pi);
       paint(pending, ctx.ui);
       const reportText = await drive(pending, makeRunner(ctx.cwd), baseUrl, ctx.ui);
       if (violations.length) {
         const vtxt = violations.map((v) => `  !! ${v.pattern} — ${v.message}`).join("\n");
-        return { content: [{ type: "text", text: `WARN: ${violations.length} step-def violations:\n${vtxt}\n\n${reportText}` }] };
+        return { content: [{ type: "text", text: `WARN: ${violations.length} step-def violations:\n${vtxt}\n\n${head}${reportText}` }] };
       }
-      return { content: [{ type: "text", text: reportText }] };
+      return { content: [{ type: "text", text: head + reportText }] };
     },
   });
 
@@ -422,6 +477,7 @@ export default async function (pi: ExtensionAPI) {
         divergence: params.divergence,
         mode: pending.stop.mode,
       });
+      pending.lastActivity = Date.now();
       pending.cursor = pending.stop.index + 1;
       pending.stop = null;
 
@@ -440,7 +496,10 @@ export default async function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "qa_abort",
     label: "QA abort",
-    description: "Abort the in-progress run and discard its state (no report).",
+    description:
+      "Abort/discard the in-progress run and its state (no report). Always available — also the recovery path when qa_run " +
+      "reports a run already in progress (e.g. one started by a session that ended); discarding is safe, the run can simply " +
+      "be started again.",
     parameters: Type.Object({}),
     async execute(_id, _params, _signal, _onUpdate, ctx) {
       if (!pending) {
@@ -448,17 +507,8 @@ export default async function (pi: ExtensionAPI) {
       }
       const n = pending.ledger.records.length;
       pending = null;
-      deactivateGuardrails(pi);
       paint(null, ctx.ui);
       return { content: [{ type: "text", text: `Run aborted (${n} verdicts discarded).` }] };
     },
   });
-}
-
-function activateGuardrails(pi: ExtensionAPI) {
-  pi.setActiveTools([...new Set([...pi.getActiveTools(), ...GUARDRAILS])]);
-}
-
-function deactivateGuardrails(pi: ExtensionAPI) {
-  pi.setActiveTools(pi.getActiveTools().filter((n) => !GUARDRAILS.includes(n)));
 }

@@ -99,11 +99,22 @@ bug-repro, otherwise `scenarioVerdict` (fail > error > skip > success; empty
 | `list_steps` | always | vocabulary truth: core verbs + every definition, bodies, `[inverted]` |
 | `validate_steps` | always | authoring lint (purity, duplicates, dangling refs) |
 | `qa_run` | always | parse + validate + expand + drive to first `Then` stop-point |
-| `qa_judge` | mid-run | record `success`/`fail`/`skip`/`error` (+ `divergence`) |
-| `qa_abort` | mid-run | discard the in-progress run |
+| `qa_judge` | always | record `success`/`fail`/`skip`/`error` (+ `divergence`) at the current stop-point |
+| `qa_abort` | always | discard the in-progress run |
 
-`qa_judge`/`qa_abort` are **guardrails** (active only mid-run, like pi-magit's
-rebase tools). `onFail` (`stop` | `continue`, default `continue`) controls
+`qa_judge`/`qa_abort` are guardrails but are **always registered and always
+active** — deliberately not dynamically activated via `setActiveTools`.
+Run state (`pending`) is process-wide module state shared by every session
+and subagent, while dynamic tool activation applies only to the session
+that calls it and is rebuilt from the base config at session boundaries
+(fork/reload/resume/new subagent). That mismatch once stranded agents: a
+run left pending by a session that ended blocked every other `qa_run`
+("already in progress") while `qa_judge`/`qa_abort` were invisible to
+them. Always-on guardrails (clean no-ops when idle) mean any session can
+judge or abort; `pending` additionally self-heals via an owner session id
+and a last-activity heartbeat — a run idle at a stop-point for >2.5 min is
+auto-discarded when a new `qa_run` starts, and the "already in progress"
+refusal reports owner/age/step so a live run is never silently clobbered. `onFail` (`stop` | `continue`, default `continue`) controls
 whether a `fail` ends the scenario immediately or the harness keeps driving to
 record every divergence. An inverted stop-point is flagged with an explicit
 plain-language hint: *"this branch is EXPECTED to fail while the bug is
