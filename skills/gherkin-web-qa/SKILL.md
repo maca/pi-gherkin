@@ -16,6 +16,9 @@ this directory for the bug-repro workflow specifically).
   harness shells out to `agent-browser` over CDP.
 - The app under test must already be served (e.g. `python3 -m http.server
   8100` from the app directory) — this harness does not start your app.
+- The **agent-browser command reference** (and any direct browser driving
+  beyond the harness's own verbs) lives in the **chrome-headless skill** —
+  this skill points there and does not reproduce it.
 
 ## Layout
 
@@ -139,10 +142,14 @@ as-is, verbatim, from the project root.
 
 ## Running a feature
 
-Four tools; `validate_steps` and `qa_run` are always available, the other
-two activate only while a run is in progress (guardrails, like pi-magit's
+Five tools; `list_steps`, `validate_steps`, and `qa_run` are always
+available, the other two activate only while a run is in progress (guardrails, like pi-magit's
 rebase tools):
 
+- **`list_steps {}`** — the vocabulary truth: every core verb and every
+  `features/steps/*.steps` definition, with bodies and `[inverted]` flags.
+  Query it before authoring (see `scenarios.md`) or before adding a
+  definition, so you reuse patterns instead of duplicating them.
 - **`qa_run { feature, baseUrl, onFail }` — parses the feature +
   `features/steps/*.steps`, validates purity, expands composites, and
   drives actions until the first `Then` stop-point. Returns a
@@ -194,19 +201,13 @@ establish the starting state). Write each scenario's setup as if the browser
 starts fresh, because it will: don't rely on a previous scenario having left
 you logged in or mid-flow.
 
-## Writing a new scenario
+## Writing a new scenario (story authoring)
 
-1. Check what already exists — `features/steps/*.steps` — before adding a
-   new `Composite:`/`step:`. Reuse vocabulary.
-2. Keep each `Scenario:` about one behavior. Setup via a `Composite:`
-   (`the user "{name}" is logged in`), the action under test inline, one
-   focused `Then`.
-3. Prefer the core verbs directly in the feature body; reach for a new
-   `Composite:` only for setup/teardown you'll reuse, and a new `step:`
-   leaf only when you're genuinely leaving the UI (and then via the
-   least-power ladder above).
-4. Run it. Judge honestly at each stop. Let the harness's derivation (not
-   your narration) decide the final status.
+See `scenarios.md` in this directory for the full story-authoring workflow:
+ground in `list_steps` first, one behavior per `Scenario:`, setup as a
+`Composite:`, one observable `Then`, extend the vocabulary when a step would
+be UNDEFINED, then `validate_steps` + `qa_run`. In one line: **query the
+vocabulary, reuse it, and let the harness own execution and derivation.**
 
 ## Bug reproduction
 

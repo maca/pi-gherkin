@@ -79,6 +79,6 @@ judgement to make the status come out right.
 - `expected` = intended reality (must fail while the bug is present). Keep it a
   single observable `Then`.
 - Reuse existing vocabulary and composites; add a `step:`/`Composite:` only when
-  genuinely new (check `ghk index` first).
+  genuinely new (query `list_steps {}` first — it is the vocabulary truth).
 - Judge each `Then` honestly: success = observed, fail = diverged. The harness
   owns the inversion, not you.
