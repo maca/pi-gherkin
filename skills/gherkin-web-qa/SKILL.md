@@ -1,3 +1,15 @@
+---
+name: gherkin-web-qa
+description: |
+  Author and run Gherkin feature files against a live web app through
+  agent-browser, with deterministic harness tools (list_steps, validate_steps,
+  qa_run, qa_judge, qa_abort) and an LLM agent that authors scenarios and
+  judges evidence at stop-points. Covers story/scenario authoring (scenarios.md)
+  and turning bugs into runnable reproductions with [inverted] branches
+  (bug-reports.md). Trigger phrases: "write a feature test", "run this scenario
+  live", "reproduce this bug in Gherkin", "what steps does the harness know".
+---
+
 # Gherkin web QA — author and run
 
 Write runnable Gherkin against a live web app and drive it through

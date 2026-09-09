@@ -30,7 +30,8 @@ scripts/        CLI drivers (harness = synthetic drill, run = live one-scenario,
                 validate-steps = authoring lint)
 features/       the corpus: *.feature + steps/*.steps (project vocabulary)
 skills/         the skill kit (SKILL.md + fragments)
-.pi/extensions/ gherkin-qa.ts — the pi tools (gitignored, lives on disk)
+extension/      gherkin-qa.ts — the committed, symlink-safe pi extension
+.pi/extensions/ local symlink to extension/ (gitignored; project-local load)
 demo-app/       a two-page app with a seeded bug (the live test target)
 scratch/        backlog + old drafts
 ```
@@ -175,8 +176,12 @@ these skills point there rather than reproduce it.
 8. **Progress = single-line widget**, human-only, never in LLM context.
 9. **`qa-run` entry = data + themed renderer** — durable, human-facing, never
    in LLM context.
-10. **Extension changes deliberately uncommitted** — `.pi/` is gitignored;
-    `src/` + `test/` + `scripts/` + `skills/` are the committed record.
+10. **Extension is self-contained and committed** — `extension/gherkin-qa.ts`
+    resolves `src/` from its own realpath (`import.meta.url` + `realpathSync`)
+    and loads the engine via dynamic import, so it works in place, copied, or
+    symlinked from any pi extensions directory (jiti resolves relative imports
+    against the *symlink* path, which the realpath indirection defeats). The
+    project-local `.pi/extensions/gherkin-qa.ts` is a gitignored symlink to it.
 
 ## Status
 
