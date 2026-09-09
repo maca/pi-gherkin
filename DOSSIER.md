@@ -3,7 +3,7 @@
 The consolidated record of what this harness is, the decisions that shaped
 it, and where it stands. The **harness is the source of truth** (tools +
 `features/steps/*.steps`), not this document; unimplemented ideas live in
-[`scratch/backlog.md`](scratch/backlog.md), not in prose.
+[`BACKLOG.md`](BACKLOG.md), not in prose.
 
 ## The model
 
@@ -172,7 +172,7 @@ these skills point there rather than reproduce it.
    branch is expected to fail while the bug is present, so honest `fail`s
    yield `reproduced` rather than a false scenario failure.
 7. **Docs are not the truth** — vocabulary is queried via `list_steps`, not
-   read from files; unimplemented ideas go in `scratch/backlog.md`.
+   read from files; unimplemented ideas go in `BACKLOG.md`.
 8. **Progress = single-line widget**, human-only, never in LLM context.
 9. **`qa-run` entry = data + themed renderer** — durable, human-facing, never
    in LLM context.
@@ -190,4 +190,4 @@ these skills point there rather than reproduce it.
   branch honestly judged `fail`); `order.feature` → `2 success` across a
   per-scenario reset; widget + themed entry renderer confirmed in a real
   session.
-- Unimplemented ideas: see [`scratch/backlog.md`](scratch/backlog.md).
+- Unimplemented ideas: see [`BACKLOG.md`](BACKLOG.md).
