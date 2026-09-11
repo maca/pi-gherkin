@@ -4,5 +4,7 @@ Feature: Bug 999 — wrong confirmation text
     Given the user "Macario" is logged in
     When I fill the "Item" field with "Wonder Widget"
     And I click "Submit Order"
-    Then the actual behavior is observed
-    Then the expected behavior is observed
+    Actual:
+      Then I should see the message "Honky dory!"
+    Expected:
+      Then I should see the message "All good!"

@@ -55,7 +55,6 @@ export async function runScenario(
           step: step.text,
           verdict,
           evidence: out.evidence,
-          mode: step.mode,
         });
         if (verdict === "fail" && onFail === "stop") return records;
         if (verdict === "error") return records;
@@ -69,7 +68,6 @@ export async function runScenario(
           verdict: "error",
           evidence: "",
           divergence: "no core verb or definition (add a def or extend the core)",
-          mode: step.mode,
         });
         return records;
       case "error":
@@ -79,7 +77,6 @@ export async function runScenario(
           step: step.text,
           verdict: "error",
           evidence: out.error,
-          mode: step.mode,
         });
         return records;
     }

@@ -8,8 +8,6 @@
 
 export type Verdict = "success" | "fail" | "skip" | "error";
 
-import type { Mode } from "./parse.ts";
-
 export interface StopRecord {
   scenario: string;
   stepIndex: number;
@@ -19,8 +17,8 @@ export interface StopRecord {
   evidence: string;
   /** Expected-vs-observed divergence on a fail. */
   divergence?: string;
-  /** Checking mode: holds (default) or inverted (expected to fail). */
-  mode?: Mode;
+  /** Which bug-repro branch this record belongs to, if any (see bugStatus). */
+  branch?: "actual" | "expected";
 }
 
 export interface RunLedger {
@@ -63,7 +61,7 @@ const OUTCOME_LABELS: ScenarioOutcome[] = [
   "error",
   "reproduced",
   "fixed",
-  "drift",
+  "not-reproduced",
 ];
 
 export function report(ledger: RunLedger, opts: ReportOptions): string {
@@ -84,7 +82,7 @@ export function report(ledger: RunLedger, opts: ReportOptions): string {
       if (outcome(s) === "success") continue;
       lines.push(`scenario ${s}  ->  ${outcome(s)}`);
       for (const r of byScenario.get(s) ?? []) {
-        const trivial = r.mode !== "inverted" && r.verdict === "success";
+        const trivial = !r.branch && r.verdict === "success";
         if (!trivial) lines.push(...recordLines(r));
       }
     }
@@ -116,19 +114,26 @@ export function reportJson(ledger: RunLedger): StopRecord[] {
 
 /** Bug-repro status for a scenario's records, or null when it isn't one.
  *
- *   reproduced ⇔ actual holds ∧ inverted diverges   (claims correct: bug present)
- *   fixed      ⇔ inverted holds                     (claims correct: bug gone)
- *   drift      ⇔ actual fails                       (claims wrong: report stale)
+ * Derived from the two branch-tagged records, not written by the agent.
+ * Expected is checked FIRST (drive-time short-circuit — Actual is skipped
+ * once Expected holds), so an actual-branch record exists only when the
+ * expected-branch one failed:
+ *
+ *   fixed          ⇔ expected record holds                  (bug gone)
+ *   reproduced     ⇔ expected fails ∧ actual record holds    (bug present, as reported)
+ *   not-reproduced ⇔ expected fails ∧ actual also fails      (neither observed — report stale)
+ *
+ * An `error` verdict on either branch means the judgment is inconclusive
+ * (a driving failure, not evidence) — no status is derived.
  */
-export type BugStatus = "reproduced" | "fixed" | "drift";
+export type BugStatus = "reproduced" | "fixed" | "not-reproduced";
 
 export function bugStatus(records: StopRecord[]): BugStatus | null {
-  const inverted = records.filter((r) => r.mode === "inverted");
-  if (inverted.length === 0) return null;
-  const actualFail = records.some(
-    (r) => r.mode !== "inverted" && (r.verdict === "fail" || r.verdict === "error"),
-  );
-  if (actualFail) return "drift";
-  if (inverted.some((r) => r.verdict === "success")) return "fixed";
-  return "reproduced";
+  const expected = records.find((r) => r.branch === "expected");
+  if (!expected) return null;
+  if (expected.verdict === "error") return null;
+  if (expected.verdict === "success") return "fixed";
+  const actual = records.find((r) => r.branch === "actual");
+  if (!actual || actual.verdict === "error") return null;
+  return actual.verdict === "success" ? "reproduced" : "not-reproduced";
 }

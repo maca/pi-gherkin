@@ -14,7 +14,7 @@ import { matchPattern } from "../src/match.ts";
 import { renderStep } from "../src/core.ts";
 import { validateDefinitions } from "../src/validate.ts";
 import { expandStep, expandSteps } from "../src/expand.ts";
-import { report, bugStatus, type RunLedger } from "../src/ledger.ts";
+import { report, type RunLedger } from "../src/ledger.ts";
 
 const root = process.argv[2] ?? ".";
 const baseUrl = "http://127.0.0.1:8099/";
@@ -90,29 +90,23 @@ for (const [step] of used) {
   }
 }
 
-// Synthetic run: holds steps pass, inverted steps fail (the buggy reality).
-// Exercises the ledger + summary + bug-repro derivation on the real corpus.
+// Synthetic run: every step passes. Exercises the ledger + summary on the
+// real corpus. (Actual:/Expected: bug-repro branching is scenario-tail
+// syntax handled by the pi extension's own parser, not this seed script —
+// see extension/gherkin-qa.ts.)
 const ledger: RunLedger = { scenarios: [], records: [] };
 for (const sc of scenarios) {
   ledger.scenarios.push(sc.name);
   const concrete = sc.steps.flatMap((s) => expandSteps(s, defs));
   concrete.forEach((st, i) => {
-    const inverted = st.mode === "inverted";
     ledger.records.push({
       scenario: sc.name,
       stepIndex: i,
       step: st.text,
-      verdict: inverted ? "fail" : "success",
+      verdict: "success",
       evidence: (renderStep(st.text, { baseUrl }) ?? ["undefined"])[0],
-      mode: st.mode,
-      divergence: inverted ? "(synthetic: inverted branch expected to diverge)" : undefined,
     });
   });
 }
-console.log("\n# synthetic run (holds pass, inverted fail):");
+console.log("\n# synthetic run (all steps pass):");
 console.log(report(ledger, { mode: "summary" }));
-for (const sc of scenarios) {
-  const recs = ledger.records.filter((r) => r.scenario === sc.name);
-  const bs = bugStatus(recs);
-  if (bs) console.log(`  bug status: ${sc.name} -> ${bs}`);
-}

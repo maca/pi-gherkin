@@ -19,7 +19,7 @@ function fakeRun(
 const ok: Judge = () => "success";
 const fail: Judge = () => "fail";
 
-const st = (text: string, mode: Step["mode"] = "holds"): Step => ({ text, mode });
+const st = (text: string): Step => ({ text });
 
 const steps: Step[] = [
   st('I click "A"'),
@@ -114,19 +114,4 @@ step: the browser storage is empty
   });
   assert.equal(records.length, 0); // action leaves are not stop-points
   assert.match(log[0], /^agent-browser eval --base64 /);
-});
-
-test("records the step's checking mode on stop records", async () => {
-  const records = await runScenario(
-    [st('I click "A"'), st('I should see the message "Hi"', "inverted")],
-    {
-      run: fakeRun({}, []),
-      baseUrl: "http://b/",
-      judge: ok,
-      scenario: "s",
-    },
-  );
-  assert.equal(records.length, 1);
-  assert.equal(records[0].mode, "inverted");
-  assert.equal(records[0].step, 'I should see the message "Hi"');
 });

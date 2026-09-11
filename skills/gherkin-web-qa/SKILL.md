@@ -5,7 +5,7 @@ description: |
   agent-browser, with deterministic harness tools (list_steps, validate_steps,
   qa_run, qa_judge, qa_abort) and an LLM agent that authors scenarios and
   judges evidence at stop-points. Covers story/scenario authoring (scenarios.md)
-  and turning bugs into runnable reproductions with [inverted] branches
+  and turning bugs into runnable reproductions with Actual:/Expected: branches
   (bug-reports.md). Trigger phrases: "write a feature test", "run this scenario
   live", "reproduce this bug in Gherkin", "what steps does the harness know".
 ---
@@ -37,11 +37,10 @@ this directory for the bug-repro workflow specifically).
 ```
 features/
   order.feature          # Feature + Scenario, plain Gherkin
-  bug-999.feature        # a bug repro, same shape
+  bug-999.feature        # a bug repro: setup + Actual:/Expected: tail
   steps/
     auth.steps           # Composite: definitions (project vocabulary)
     seed.steps           # step: leaves (code-block escapes)
-    bug999.steps         # Composite: definitions for one bug repro
 ```
 
 Scenarios reference **your project's vocabulary** (`Composite:` groups) and
@@ -75,16 +74,23 @@ Both headers are case-insensitive and always start at column 0; bodies are
 indented under them. `#` starts a comment (skipped, except verbatim inside
 a fenced code block).
 
-## `[inverted]` — checked-but-inverted branches
+## `Actual:`/`Expected:` — bug-repro branch tail
 
-```
-Composite: the expected behavior is observed   [inverted]
-  Then I should see exactly one such message
+```gherkin
+Scenario: order confirmation shows the wrong message
+  Given the user "Macario" is logged in
+  When I fill the "Item" field with "Wonder Widget"
+  And I click "Submit Order"
+  Actual:
+    Then I should see the message "Honky dory!"
+  Expected:
+    Then I should see the message "All good!"
 ```
 
-Mark a `Composite:` header `[inverted]` when its steps are **expected to
-fail** while a bug is present (rather than expected to hold, the default).
-The flag propagates recursively through nested composite expansion. This is
+A `Scenario:` may end with exactly this tail: one `Actual:` header, one
+`Expected:` header (in that order), each followed by exactly one step, and
+nothing after. This is scenario syntax, not a `.steps` construct — malformed
+usage (missing pair, extra steps, wrong order) is a parse-time error. This is
 the mechanism behind bug reproduction — see `bug-reports.md`.
 
 ## Canonical core vocabulary
@@ -160,9 +166,9 @@ must be judgeable from any session and a wedged run must always be
 abortable (see recovery note under `qa_run`):
 
 - **`list_steps {}`** — the vocabulary truth: every core verb and every
-  `features/steps/*.steps` definition, with bodies and `[inverted]` flags.
-  Query it before authoring (see `scenarios.md`) or before adding a
-  definition, so you reuse patterns instead of duplicating them.
+  `features/steps/*.steps` definition, with bodies. Query it before
+  authoring (see `scenarios.md`) or before adding a definition, so you reuse
+  patterns instead of duplicating them.
 - **`qa_run { feature, baseUrl, onFail }` — parses the feature +
   `features/steps/*.steps`, validates purity, expands composites, and
   drives actions until the first `Then` stop-point. Returns a
@@ -185,17 +191,19 @@ abortable (see recovery note under `qa_run`):
   (e.g. one started by a session that ended before judging its last
   stop-point). Discarding is safe — just start the run again.
 
-An inverted stop-point (`mode: inverted`) is called out explicitly in the
-prompt: *"this branch is EXPECTED to fail while the bug is present."* Judge
-it exactly as honestly as any other step — from the evidence, not from what
-would make the derived status come out a particular way. The harness (not
-you) turns your honest verdicts into `reproduced` / `fixed` / `drift`.
+A bug-repro scenario's `Expected:` stop-point is checked **first**; a
+success there short-circuits the run past `Actual:` entirely (bug considered
+fixed). Only when `Expected:` fails does the harness drive to `Actual:`, to
+confirm the bug as reported. Judge each exactly as honestly as any other
+step — a `fail` on `Expected:` is the normal, expected routing path, not a
+run failure. The harness (not you) turns your honest verdicts into
+`fixed` / `reproduced` / `not-reproduced`.
 
 ## The final report
 
 `RUN COMPLETE` gives you the **actionable** report: a one-line header with
 counts per outcome, then a block **only** for scenarios that need action —
-failures, and any bug-repro scenario (`reproduced`, `fixed`, or `drift`).
+failures, and any bug-repro scenario (`reproduced`, `fixed`, or `not-reproduced`).
 Passing plain scenarios are counted, not detailed; you don't need their
 trace to act.
 
@@ -234,4 +242,4 @@ vocabulary, reuse it, and let the harness own execution and derivation.**
 
 See `bug-reports.md` in this directory for turning an existing bug report,
 or a bug you find while testing, into one atomic runnable scenario with an
-`actual` and an `[inverted]` `expected` composite branch.
+`Actual:`/`Expected:` branch tail.

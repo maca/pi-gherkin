@@ -17,8 +17,7 @@ export function renderVocabulary(defs: Definition[]): string {
   out.push(`# project steps (features/steps/*.steps — ${defs.length} definition${defs.length === 1 ? "" : "s"})`);
   for (const d of defs) {
     const tag = d.kind === "composite" ? "composite" : "step";
-    const inv = d.mode === "inverted" ? "  [inverted]" : "";
-    out.push(`[${tag}] ${d.pattern}${inv}`);
+    out.push(`[${tag}] ${d.pattern}`);
     for (const line of d.body) {
       out.push(`  ${line}`);
     }

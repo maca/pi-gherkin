@@ -40,16 +40,16 @@ scratch/        backlog + old drafts
 
 | module | role |
 |---|---|
-| `parse.ts` | `.steps` parser → `Definition[]` (kind, pattern, body, mode) |
+| `parse.ts` | `.steps` parser → `Definition[]` (kind, pattern, body) |
 | `match.ts` | `{placeholder}` pattern matcher |
 | `validate.ts` | purity: `Composite:` bodies pure Gherkin; `step:` leaves bodyless |
-| `expand.ts` | recursive composite unroll → `Step[]` (text + inherited mode) |
+| `expand.ts` | recursive composite unroll → `Step[]` (text) |
 | `core.ts` | the 11 canonical core verbs → agent-browser command renderings |
 | `executor.ts` | step → action/observe execution (core verbs, then leaf fallback) |
 | `leaf.ts` | code-leaf resolution: ` ```js ` (base64 `agent-browser eval`) / ` ```bash ` (local) |
 | `scenario.ts` | run a scenario's `Step[]`, judge at each `Then`, record verdicts |
 | `reset.ts` | deterministic per-scenario reset (reopen base URL + clear storage) |
-| `ledger.ts` | verdicts → scenario outcomes + `reproduced`/`fixed`/`drift` + reports |
+| `ledger.ts` | verdicts → scenario outcomes + `reproduced`/`fixed`/`not-reproduced` + reports |
 | `lint.ts` | authoring lint: purity + duplicate patterns + dangling references |
 | `list.ts` | vocabulary rendering (the `list_steps` tool's truth) |
 
@@ -73,30 +73,38 @@ rejected with a precise violation rather than silently accepted.
 
 Visible text, not DOM ids — `I click "Sign In"` matches what a human reads.
 
-## Bug reproduction — `[inverted]` + derivation
+## Bug reproduction — `Actual:`/`Expected:` + derivation
 
-A bug-repro is one atomic scenario with two `Composite:` branches: an
-**actual** branch (must hold — observed reality) and an **expected** branch
-marked `[inverted]` (must fail while the bug is present). The flag propagates
-recursively through expansion.
+A bug-repro is one atomic `Scenario:` ending in a branch tail: one `Actual:`
+header and one `Expected:` header, in that order, each followed by exactly
+one step, nothing after. This is scenario-tail syntax parsed by the pi
+extension itself (`parseFeature` in `extension/gherkin-qa.ts`), not a
+`.steps` construct — malformed usage is a parse-time error, not a silent
+drop.
 
-The harness derives status from honest verdicts — the agent never writes it:
+`Expected:` is checked **first**, at drive-time. A `success` there
+short-circuits the scenario past `Actual:` entirely — it is never driven or
+judged. Only when `Expected:` fails (or is skipped) does the harness advance
+to `Actual:`. The harness derives status from honest verdicts — the agent
+never writes it:
 
 ```
-reproduced ⇔ actual holds ∧ inverted diverges   (bug present)
-fixed      ⇔ inverted holds                     (bug gone)
-drift      ⇔ actual fails                       (report stale)
+fixed          ⇔ Expected: holds                        (Actual: short-circuited)
+reproduced     ⇔ Expected: fails ∧ Actual: holds         (bug present, as reported)
+not-reproduced ⇔ Expected: fails ∧ Actual: also fails     (report stale)
 ```
 
-`bugStatus(records)` is tried first; a scenario with any inverted record is a
-bug-repro, otherwise `scenarioVerdict` (fail > error > skip > success; empty
-⇒ skip) applies.
+An `error` verdict on either branch yields no status (inconclusive — a
+driving failure, not evidence). `bugStatus(records)` (`src/ledger.ts`) keys
+on `records.find(r => r.branch === "expected"/"actual")`; a scenario with an
+expected-branch record is a bug-repro, otherwise `scenarioVerdict`
+(fail > error > skip > success; empty ⇒ skip) applies.
 
 ## Tool surface (pi extension, 5 tools)
 
 | tool | availability | role |
 |---|---|---|
-| `list_steps` | always | vocabulary truth: core verbs + every definition, bodies, `[inverted]` |
+| `list_steps` | always | vocabulary truth: core verbs + every definition, with bodies |
 | `validate_steps` | always | authoring lint (purity, duplicates, dangling refs) |
 | `qa_run` | always | parse + validate + expand + drive to first `Then` stop-point |
 | `qa_judge` | always | record `success`/`fail`/`skip`/`error` (+ `divergence`) at the current stop-point |
@@ -116,9 +124,12 @@ and a last-activity heartbeat — a run idle at a stop-point for >2.5 min is
 auto-discarded when a new `qa_run` starts, and the "already in progress"
 refusal reports owner/age/step so a live run is never silently clobbered. `onFail` (`stop` | `continue`, default `continue`) controls
 whether a `fail` ends the scenario immediately or the harness keeps driving to
-record every divergence. An inverted stop-point is flagged with an explicit
-plain-language hint: *"this branch is EXPECTED to fail while the bug is
-present."*
+record every divergence. `onFail:"stop"` is scenario-scoped, not run-scoped —
+it abandons the rest of the current scenario only; other scenarios in the
+feature still run. A bug-repro scenario's `Expected:` stop-point is flagged
+with an explicit branch hint in the prompt; a `fail` verdict there is exempt
+from `onFail:"stop"` unconditionally — it is the normal branch-routing path
+into `Actual:`, not a failure.
 
 ## Reports — two channels, one ledger
 
@@ -128,7 +139,7 @@ The ledger records at per-`Then` granularity always. Two projections:
   blocks *only* for non-success scenarios (fails, errors, skips, and every
   bug-repro), with non-trivial records carrying evidence + divergence.
 - **Human** — the full ledger persists as a `qa-run` transcript entry (themed
-  renderer: `success`/`fixed` green, `skip`/`drift` yellow, `fail`/`error`/
+  renderer: `success`/`fixed` green, `skip`/`not-reproduced` yellow, `fail`/`error`/
   `reproduced` red; expand for the per-step trace), plus a single-line live
   widget ticking scenario/step/state/verdicts. Progress is harness-authored —
   identical regardless of agent strength — and never enters LLM context.
@@ -144,15 +155,16 @@ clear) runs before every scenario after the first; the first scenario's own
 - `features/order.feature` — happy path + unknown-item edge (2 scenarios).
 - `features/bug-999.feature` — one atomic bug repro (wrong confirmation text:
   app shows "Honky dory!" where "All good!" is expected).
-- `features/steps/` — `auth.steps`, `seed.steps`, `bug999.steps` (6 definitions).
+- `features/steps/` — `auth.steps`, `seed.steps` (the bug repro uses core
+  verbs directly in its `Actual:`/`Expected:` tail, no dedicated `.steps` file).
 - `demo-app/` — two-page app (`index.html` login → `app.html`), seeded bug.
 
 ## Skills
 
 One skill kit (`skills/gherkin-web-qa/`):
 
-- `SKILL.md` — the model, layout, two definition kinds, `[inverted]`, core
-  vocab, code-leaf ladder, tool set, report, reset.
+- `SKILL.md` — the model, layout, two definition kinds, `Actual:`/`Expected:`,
+  core vocab, code-leaf ladder, tool set, report, reset.
 - `scenarios.md` — story/scenario authoring (query `list_steps` → reuse →
   one-behavior → extend → `validate_steps` → run).
 - `bug-reports.md` — bug → runnable repro (Mode A existing report, Mode B
@@ -171,17 +183,20 @@ these skills point there rather than reproduce it.
 1. **Deterministic core in `src/`** (TS, node strip-types); the pi extension
    imports those modules directly via jiti — one source of truth, no build.
 2. **Harness drives, agent judges** — the agent sees only stop-point prompts
-   (expected/evidence, with inverted hint) then the actionable report; never
-   the raw ledger.
-3. **`runScenario` takes `Step[]` only** — records carry `step.mode`, so
-   bug-status derivation sees which steps were checked-but-inverted.
+   (expected/evidence, with a branch hint for `Actual:`/`Expected:`) then the
+   actionable report; never the raw ledger.
+3. **Bug-repro branching is control flow in `drive()`/`qa_judge`, not a
+   ledger-only flag** — `StopRecord.branch` (`"actual"`/`"expected"`) tags
+   each record so `bugStatus` can derive status, but the short-circuit
+   itself (skip `Actual:` when `Expected:` holds) happens at drive-time.
 4. **`scenarioOutcome` is the single display source** — summary/trace/actionable
    all label bug-repro scenarios with their bug status, not the raw verdict.
-5. **Agent report = `actionable`** — failures/bugs/drift with evidence;
-   successes counted, not detailed.
-6. **`[inverted]` in the stop-point prompt** — an explicit hint that the
-   branch is expected to fail while the bug is present, so honest `fail`s
-   yield `reproduced` rather than a false scenario failure.
+5. **Agent report = `actionable`** — failures and bug-repro scenarios (any
+   status) with evidence; successes counted, not detailed.
+6. **Branch hint in the stop-point prompt** — an explicit note on `Expected:`
+   that a `fail` there is the normal routing path (not a failure), so honest
+   `fail`s route to `Actual:` and yield `reproduced` rather than a false
+   scenario failure.
 7. **Docs are not the truth** — vocabulary is queried via `list_steps`, not
    read from files; unimplemented ideas go in `BACKLOG.md`.
 8. **Progress = single-line widget**, human-only, never in LLM context.
@@ -196,9 +211,11 @@ these skills point there rather than reproduce it.
 
 ## Status
 
-- **83 tests green** (12 test files); `validate-steps` clean (6 defs, 3 files).
-- **Live end-to-end verified**: `bug-999.feature` → `reproduced` (inverted
-  branch honestly judged `fail`); `order.feature` → `2 success` across a
-  per-scenario reset; widget + themed entry renderer confirmed in a real
-  session.
+- **77 tests green** (`npm test`); `Actual:`/`Expected:` replaced `[inverted]`
+  fully, no backward compat kept.
+- **Live end-to-end verified**: `bug-999.feature` → `Expected:` checked first,
+  honestly judged `fail` ("All good!" never appeared), short-circuit advanced
+  to `Actual:`, judged `success` ("Honky dory!" observed) → derived status
+  `reproduced`. Confirmed against a live pi session after `/reload` picked up
+  the rewritten extension.
 - Unimplemented ideas: see [`BACKLOG.md`](BACKLOG.md).

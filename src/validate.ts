@@ -36,12 +36,6 @@ export function validateDefinitions(defs: Definition[]): Violation[] {
         out.push({ pattern: d.pattern, message: "Composite has an empty body" });
       }
     } else {
-      if (d.mode === "inverted") {
-        out.push({
-          pattern: d.pattern,
-          message: "[inverted] is only valid on Composite: (leaves are concrete, not branches)",
-        });
-      }
       if (hasSteps) {
         out.push({
           pattern: d.pattern,

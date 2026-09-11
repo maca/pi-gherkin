@@ -3,9 +3,11 @@
 // Model: harness drives, agent judges. qa_run parses+validates+expands a
 // feature, then drives agent-browser action-by-action until it reaches a Then
 // stop-point; it returns a self-contained assessment prompt (expected step +
-// observed evidence, with an inverted-branch hint for bug-repros). The agent
-// calls qa_judge with its verdict, and the harness records it and drives to
-// the next stop.
+// observed evidence, with a branch hint for a bug-repro scenario's tail
+// Actual:/Expected: check). The agent calls qa_judge with its verdict, and
+// the harness records it and drives to the next stop — short-circuiting
+// Actual once Expected holds, and abandoning only the current scenario (not
+// the whole run) on a real failure.
 //
 // Progress is harness-authored: a single-line widget ticks as the drive loop
 // advances (human-only, never in LLM context). At the end the agent receives
@@ -55,14 +57,18 @@ const RUN_STALE_MS = 150_000;
 
 interface ScenarioPlan {
   name: string;
-  /** Expanded concrete steps with their checking mode. */
+  /** Expanded concrete steps (the scenario's linear body). */
   steps: Step[];
+  /** Bug-repro branch tail: Actual:/Expected:, each exactly one concrete step. */
+  actual?: Step;
+  expected?: Step;
 }
 
 interface StopPoint {
   index: number;
   step: string;
-  mode: "holds" | "inverted";
+  /** Which bug-repro branch this stop belongs to, if any. */
+  branch?: "actual" | "expected";
   evidence: string;
   code: number;
 }
@@ -92,7 +98,7 @@ interface QaRunEntryData {
 
 function outcomeColor(o: string): "success" | "error" | "warning" {
   if (o === "success" || o === "fixed") return "success";
-  if (o === "skip" || o === "drift") return "warning";
+  if (o === "skip" || o === "not-reproduced") return "warning";
   return "error"; // fail, error, reproduced
 }
 
@@ -168,19 +174,73 @@ export default async function (pi: ExtensionAPI) {
       .flatMap((f) => parseDefinitions(readFileSync(join(dir, f), "utf8")));
   };
 
-  const parseFeature = (text: string): Array<{ name: string; raw: string[] }> => {
-    const out: Array<{ name: string; raw: string[] }> = [];
-    let cur: { name: string; raw: string[] } | null = null;
+  interface RawScenario {
+    name: string;
+    raw: string[];
+    actual?: string;
+    expected?: string;
+  }
+
+  const STEP_LINE = /^\s*(Given|When|Then|And|But|\*)\s+(.+)$/;
+  const ACTUAL_HDR = /^\s*Actual:\s*$/;
+  const EXPECTED_HDR = /^\s*Expected:\s*$/;
+
+  // Actual:/Expected: is a scenario-tail bug-repro branch — not a standard
+  // Gherkin construct (there isn't one). The harness checks Expected FIRST,
+  // short-circuiting Actual on success (bug considered fixed); only when
+  // Expected fails does it check Actual, to confirm the bug as reported.
+  // Exactly one pair, one step each, nothing after — malformed usage is a
+  // hard parse error (not a silent drop, which used to be the trap).
+  const parseFeature = (text: string): RawScenario[] => {
+    const out: RawScenario[] = [];
+    let cur: RawScenario | null = null;
+    let state: "body" | "afterActual" | "afterActualStep" | "afterExpected" | "done" = "body";
+    const fail = (msg: string): never => {
+      throw new Error(`Feature parse error in scenario "${cur?.name ?? "?"}": ${msg}`);
+    };
     for (const line of text.split("\n")) {
+      if (!line.trim()) continue;
       const sc = /^\s*Scenario:\s*(.+)$/.exec(line);
       if (sc) {
+        if (cur && state !== "body" && state !== "done") fail("incomplete Actual:/Expected: block");
         cur = { name: sc[1].trim(), raw: [] };
         out.push(cur);
+        state = "body";
         continue;
       }
-      const m = /^\s*(Given|When|Then|And|But|\*)\s+(.+)$/.exec(line);
-      if (m && cur) cur.raw.push(m[2].trim());
+      if (!cur) continue;
+      if (state === "body") {
+        if (ACTUAL_HDR.test(line)) {
+          state = "afterActual";
+          continue;
+        }
+        if (EXPECTED_HDR.test(line)) fail("Expected: without a preceding Actual:");
+        const m = STEP_LINE.exec(line);
+        if (m) cur.raw.push(m[2].trim());
+        continue;
+      }
+      if (state === "afterActual") {
+        const m = STEP_LINE.exec(line);
+        if (!m) fail("Actual: must be followed by exactly one step");
+        cur.actual = m![2].trim();
+        state = "afterActualStep";
+        continue;
+      }
+      if (state === "afterActualStep") {
+        if (!EXPECTED_HDR.test(line)) fail("Actual: must be immediately followed by Expected:");
+        state = "afterExpected";
+        continue;
+      }
+      if (state === "afterExpected") {
+        const m = STEP_LINE.exec(line);
+        if (!m) fail("Expected: must be followed by exactly one step");
+        cur.expected = m![2].trim();
+        state = "done";
+        continue;
+      }
+      if (state === "done") fail("no steps allowed after Actual:/Expected:");
     }
+    if (cur && state !== "body" && state !== "done") fail("incomplete Actual:/Expected: block");
     return out;
   };
 
@@ -194,35 +254,59 @@ export default async function (pi: ExtensionAPI) {
 
   const currentScenario = (pr: PendingRun) => pr.scenarios[pr.scenarioIndex];
 
-  // Drive until the next stop-point, an error, or the end of the run.
+  /** The concrete step at pr.cursor: linear body, then Expected, then Actual. */
+  const stepAt = (
+    sc: ScenarioPlan,
+    cursor: number,
+  ): { step: Step; branch?: "actual" | "expected" } | null => {
+    if (cursor < sc.steps.length) return { step: sc.steps[cursor] };
+    if (cursor === sc.steps.length && sc.expected) return { step: sc.expected, branch: "expected" };
+    if (cursor === sc.steps.length + 1 && sc.actual) return { step: sc.actual, branch: "actual" };
+    return null;
+  };
+
+  // Move to the next scenario, resetting browser state between scenarios.
+  // Scenario-scoped: abandoning the current scenario (a real failure, or a
+  // short-circuited Expected) never ends the run — only running out of
+  // scenarios does.
+  const advanceScenario = async (pr: PendingRun, runner: Runner, baseUrl: string): Promise<void> => {
+    const name = currentScenario(pr).name;
+    pr.scenarioIndex++;
+    pr.cursor = 0;
+    // Reset between scenarios (not before the first — its own Given steps
+    // establish the starting state) so one scenario's leftover state (still
+    // logged in, stale storage) cannot leak into the next.
+    if (pr.scenarioIndex > 0 && pr.scenarioIndex < pr.scenarios.length) {
+      for (const cmd of resetCommands(baseUrl)) {
+        const res = await runner(cmd);
+        if (res.code !== 0) {
+          pr.ledger.records.push({
+            scenario: name,
+            stepIndex: -1,
+            step: "(scenario reset)",
+            verdict: "error",
+            evidence: res.stderr || res.stdout || `exit ${res.code}`,
+          });
+          return;
+        }
+      }
+    }
+  };
+
+  // Drive until the next stop-point or the end of the run. A real failure
+  // (execution error, or a plain fail under onFail:"stop") abandons only the
+  // current scenario and moves on — the run itself only ends when scenarios
+  // run out (see advanceScenario).
   const drive = async (pr: PendingRun, runner: Runner, baseUrl: string, ui: unknown): Promise<string> => {
     const performed: string[] = [];
     while (pr.scenarioIndex < pr.scenarios.length) {
       const sc = currentScenario(pr);
-      if (pr.cursor >= sc.steps.length) {
-        pr.scenarioIndex++;
-        pr.cursor = 0;
-        // Reset between scenarios (not before the first — its own Given
-        // steps establish the starting state) so one scenario's leftover
-        // state (still logged in, stale storage) cannot leak into the next.
-        if (pr.scenarioIndex > 0 && pr.scenarioIndex < pr.scenarios.length) {
-          for (const cmd of resetCommands(baseUrl)) {
-            const res = await runner(cmd);
-            if (res.code !== 0) {
-              pr.ledger.records.push({
-                scenario: currentScenario(pr).name,
-                stepIndex: -1,
-                step: "(scenario reset)",
-                verdict: "error",
-                evidence: res.stderr || res.stdout || `exit ${res.code}`,
-              });
-              return finish(pr, performed, ui);
-            }
-          }
-        }
+      const at = stepAt(sc, pr.cursor);
+      if (!at) {
+        await advanceScenario(pr, runner, baseUrl);
         continue;
       }
-      const step = sc.steps[pr.cursor];
+      const { step, branch } = at;
       const out = await executeStep(step.text, { run: runner, baseUrl, defs: pr.defs }, pr.cursor);
       switch (out.kind) {
         case "action":
@@ -231,7 +315,7 @@ export default async function (pi: ExtensionAPI) {
           paint(pr, ui);
           continue;
         case "observe": {
-          pr.stop = { index: out.index, step: out.step, mode: step.mode, evidence: out.evidence, code: out.code };
+          pr.stop = { index: out.index, step: out.step, branch, evidence: out.evidence, code: out.code };
           pr.lastActivity = Date.now();
           paint(pr, ui, "waiting for judgement");
           return stopReport(pr, performed);
@@ -245,9 +329,10 @@ export default async function (pi: ExtensionAPI) {
             verdict: "error",
             evidence: out.kind === "error" ? out.error : "",
             divergence: out.kind === "undefined" ? "no core verb or definition" : undefined,
-            mode: step.mode,
+            branch,
           });
-          return finish(pr, performed, ui);
+          await advanceScenario(pr, runner, baseUrl);
+          continue;
         }
       }
     }
@@ -257,15 +342,18 @@ export default async function (pi: ExtensionAPI) {
   const stopReport = (pr: PendingRun, performed: string[]): string => {
     const sc = currentScenario(pr);
     const s = pr.stop!;
-    const inverted = s.mode === "inverted"
-      ? `\n  mode: inverted — this branch is EXPECTED to fail while the bug is present. The harness derives the bug status; judge honestly from the evidence.`
-      : "";
+    const branchHint =
+      s.branch === "expected"
+        ? `\n  branch: expected — checked FIRST. success -> bug considered fixed, Actual is skipped. fail/skip -> harness checks Actual next. A fail here is the normal, expected outcome while the bug is present, not a run failure.`
+        : s.branch === "actual"
+          ? `\n  branch: actual — reached because Expected did not hold. success -> bug reproduced as reported. fail -> neither Expected nor Actual held (not reproduced as reported).`
+          : "";
     return [
-      `STOP-POINT  scenario ${pr.scenarioIndex + 1}/${pr.scenarios.length}: "${sc.name}"  (step ${s.index + 1}/${sc.steps.length})`,
+      `STOP-POINT  scenario ${pr.scenarioIndex + 1}/${pr.scenarios.length}: "${sc.name}"  (step ${s.index + 1})`,
       performed.length ? `  performed: ${performed.join(" -> ")}` : "",
       `  expected: ${s.step}`,
       `  evidence: ${JSON.stringify(s.evidence)}   (exit ${s.code})`,
-      inverted,
+      branchHint,
       "",
       `Call qa_judge with your verdict (success|fail|skip|error). On fail, add the divergence.`,
     ]
@@ -327,7 +415,7 @@ export default async function (pi: ExtensionAPI) {
     label: "List steps",
     description:
       "List the harness's step vocabulary — the canonical core verbs plus every features/steps/*.steps " +
-      "definition (Composite: groups and step: leaves, with bodies and [inverted] flags). Query this before " +
+      "definition (Composite: groups and step: leaves, with bodies). Query this before " +
       "authoring a feature or adding a definition so you reuse existing patterns instead of duplicating them. " +
       "Always available, independent of qa_run.",
     parameters: Type.Object({}),
@@ -370,7 +458,8 @@ export default async function (pi: ExtensionAPI) {
     description:
       "Run a Gherkin feature against the live app via agent-browser (requires chrome-ctl start + the app served). " +
       "Parses, validates, and expands the feature, then drives actions until the first Then stop-point and returns an " +
-      "assessment prompt (expected step + observed evidence; inverted branches are flagged). Judge each stop-point with qa_judge. " +
+      "assessment prompt (expected step + observed evidence; a bug-repro scenario's Actual:/Expected: branch is flagged). " +
+      "Judge each stop-point with qa_judge. " +
       "A single run is enforced process-wide; qa_judge/qa_abort are always available to judge or discard it. A run left idle " +
       "at a stop-point for >2.5 min is treated as abandoned and auto-discarded when a new qa_run starts.",
     parameters: Type.Object({
@@ -384,7 +473,7 @@ export default async function (pi: ExtensionAPI) {
       if (pending) {
         const idleMs = Date.now() - pending.lastActivity;
         const stuck = pending.stop
-          ? `awaiting qa_judge at "${currentScenario(pending).name}" step ${pending.stop.index + 1}/${currentScenario(pending).steps.length}`
+          ? `awaiting qa_judge at "${currentScenario(pending).name}" step ${pending.stop.index + 1}`
           : `driving "${currentScenario(pending).name}"`;
         if (idleMs < RUN_STALE_MS) {
           return {
@@ -416,10 +505,35 @@ export default async function (pi: ExtensionAPI) {
       }
       const defs = loadDefs(ctx.cwd);
       const violations = validateDefinitions(defs);
-      const scenarios = parseFeature(readFileSync(featurePath, "utf8")).map((sc) => ({
-        name: sc.name,
-        steps: sc.raw.flatMap((s) => expandSteps(s, defs)),
-      }));
+      let rawScenarios: Array<{ name: string; raw: string[]; actual?: string; expected?: string }>;
+      try {
+        rawScenarios = parseFeature(readFileSync(featurePath, "utf8"));
+      } catch (err: any) {
+        return { content: [{ type: "text", text: `${head}${err.message}` }], details: { error: true } };
+      }
+      // Actual:/Expected: must resolve to exactly one concrete (observe) step
+      // each — a composite expanding to more than one step, or to an action,
+      // is a hard error rather than a silently mis-shaped branch.
+      const expandOne = (raw: string, scenarioName: string, label: string): Step => {
+        const expanded = expandSteps(raw, defs);
+        if (expanded.length !== 1) {
+          throw new Error(
+            `${label}: in scenario "${scenarioName}" must resolve to exactly one step (got ${expanded.length}) — "${raw}"`,
+          );
+        }
+        return expanded[0];
+      };
+      let scenarios: ScenarioPlan[];
+      try {
+        scenarios = rawScenarios.map((sc) => ({
+          name: sc.name,
+          steps: sc.raw.flatMap((s) => expandSteps(s, defs)),
+          actual: sc.actual ? expandOne(sc.actual, sc.name, "Actual") : undefined,
+          expected: sc.expected ? expandOne(sc.expected, sc.name, "Expected") : undefined,
+        }));
+      } catch (err: any) {
+        return { content: [{ type: "text", text: `${head}${err.message}` }], details: { error: true } };
+      }
       if (scenarios.length === 0) {
         return { content: [{ type: "text", text: `${head}no scenarios found in feature` }], details: { error: true } };
       }
@@ -453,7 +567,8 @@ export default async function (pi: ExtensionAPI) {
     description:
       "Record your verdict at the current stop-point of an in-progress qa_run, then continue driving to the next stop-point or the final report.",
     promptGuidelines: [
-      "Use qa_judge to answer a STOP-POINT from qa_run: judge whether the expected step holds given the evidence, and pass success/fail/skip/error. For branches flagged inverted, failure is the expected outcome while the bug is present.",
+      "Use qa_judge to answer a STOP-POINT from qa_run: judge whether the expected step holds given the evidence, and pass success/fail/skip/error. " +
+        "For a bug-repro scenario's Expected: branch (checked first), a fail is the normal, expected outcome while the bug is present — not a run failure; the harness then checks Actual: to confirm the bug as reported.",
     ],
     parameters: Type.Object({
       verdict: StringEnum(["success", "fail", "skip", "error"] as const),
@@ -467,28 +582,49 @@ export default async function (pi: ExtensionAPI) {
         return { content: [{ type: "text", text: "No stop-point pending (run already finished?)." }], details: { error: true } };
       }
       const sc = currentScenario(pending);
+      const s = pending.stop;
       const verdict = params.verdict as Verdict;
       pending.ledger.records.push({
         scenario: sc.name,
-        stepIndex: pending.stop.index,
-        step: pending.stop.step,
+        stepIndex: s.index,
+        step: s.step,
         verdict,
-        evidence: pending.stop.evidence,
+        evidence: s.evidence,
         divergence: params.divergence,
-        mode: pending.stop.mode,
+        branch: s.branch,
       });
       pending.lastActivity = Date.now();
-      pending.cursor = pending.stop.index + 1;
       pending.stop = null;
 
-      // onFail "stop" halts the run at the first fail.
-      if (verdict === "fail" && pending.onFail === "stop") {
-        return { content: [{ type: "text", text: finish(pending, [], ctx.ui) }] };
-      }
+      const runner = makeRunner(ctx.cwd);
+
       if (verdict === "error") {
-        return { content: [{ type: "text", text: finish(pending, [], ctx.ui) }] };
+        // A real driving/judgement failure abandons this scenario, never the
+        // whole run — other scenarios still get driven.
+        await advanceScenario(pending, runner, pending.baseUrl);
+      } else if (s.branch === "expected") {
+        if (verdict === "success") {
+          // Expected holds: bug considered fixed. Short-circuit — Actual is
+          // never checked, it would just be re-observing the same state.
+          await advanceScenario(pending, runner, pending.baseUrl);
+        } else {
+          // fail or skip: proceed to check Actual next, in the same scenario.
+          // A fail here is never a halt signal (onFail or not) — it's the
+          // normal path into the reproduction check.
+          pending.cursor = s.index + 1;
+        }
+      } else if (s.branch === "actual") {
+        // Resolved either way (reproduced / not-reproduced) — nothing left in
+        // this scenario's branch tail.
+        await advanceScenario(pending, runner, pending.baseUrl);
+      } else if (verdict === "fail" && pending.onFail === "stop") {
+        // Plain (non-branch) stop-point: onFail:"stop" abandons the rest of
+        // THIS scenario only — other scenarios in the run still get driven.
+        await advanceScenario(pending, runner, pending.baseUrl);
+      } else {
+        pending.cursor = s.index + 1;
       }
-      const reportText = await drive(pending, makeRunner(ctx.cwd), pending.baseUrl, ctx.ui);
+      const reportText = await drive(pending, runner, pending.baseUrl, ctx.ui);
       return { content: [{ type: "text", text: reportText }] };
     },
   });

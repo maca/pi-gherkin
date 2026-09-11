@@ -15,8 +15,8 @@ const rec = (
   verdict: StopRecord["verdict"],
   evidence: string,
   divergence?: string,
-  mode?: StopRecord["mode"],
-): StopRecord => ({ scenario, stepIndex, step, verdict, evidence, divergence, mode });
+  branch?: StopRecord["branch"],
+): StopRecord => ({ scenario, stepIndex, step, verdict, evidence, divergence, branch });
 
 test("scenario verdict: all success", () => {
   assert.equal(
@@ -82,37 +82,41 @@ test("reportJson returns the raw records", () => {
   assert.deepEqual(reportJson({ scenarios: ["s1"], records }), records);
 });
 
-test("bugStatus: null when there are no inverted records", () => {
+test("bugStatus: null when there is no expected-branch record", () => {
   assert.equal(bugStatus([rec("s1", 0, "a", "success", "ok")]), null);
 });
 
-test("bugStatus: reproduced when actual holds and inverted diverges", () => {
+test("bugStatus: fixed when Expected holds (Actual short-circuited, never recorded)", () => {
+  assert.equal(
+    bugStatus([rec("s", 0, "expected", "success", "B", undefined, "expected")]),
+    "fixed",
+  );
+});
+
+test("bugStatus: reproduced when Expected fails and Actual holds", () => {
   assert.equal(
     bugStatus([
-      rec("s", 0, "actual", "success", "A", undefined, "holds"),
-      rec("s", 1, "expected", "fail", "B", "div", "inverted"),
+      rec("s", 0, "expected", "fail", "B", "div", "expected"),
+      rec("s", 1, "actual", "success", "A", undefined, "actual"),
     ]),
     "reproduced",
   );
 });
 
-test("bugStatus: fixed when the inverted branch holds", () => {
+test("bugStatus: not-reproduced when both Expected and Actual fail", () => {
   assert.equal(
     bugStatus([
-      rec("s", 0, "actual", "success", "A", undefined, "holds"),
-      rec("s", 1, "expected", "success", "B", undefined, "inverted"),
+      rec("s", 0, "expected", "fail", "B", "d", "expected"),
+      rec("s", 1, "actual", "fail", "A", "d", "actual"),
     ]),
-    "fixed",
+    "not-reproduced",
   );
 });
 
-test("bugStatus: drift when the actual branch fails", () => {
+test("bugStatus: null when the expected-branch verdict is error", () => {
   assert.equal(
-    bugStatus([
-      rec("s", 0, "actual", "fail", "A", "d", "holds"),
-      rec("s", 1, "expected", "fail", "B", "d", "inverted"),
-    ]),
-    "drift",
+    bugStatus([rec("s", 0, "expected", "error", "boom", undefined, "expected")]),
+    null,
   );
 });
 
@@ -120,22 +124,22 @@ test("summary report shows bug-repro status instead of raw fail", () => {
   const ledger = {
     scenarios: ["s1"],
     records: [
-      rec("s1", 0, "actual", "success", "A", undefined, "holds"),
-      rec("s1", 1, "expected", "fail", "B", "div", "inverted"),
+      rec("s1", 0, "expected", "fail", "B", "div", "expected"),
+      rec("s1", 1, "actual", "success", "A", undefined, "actual"),
     ],
   };
   const out = report(ledger, { mode: "summary" });
   assert.match(out, /s1\s+reproduced/);
 });
 
-test("actionable report: header counts and blocks for failures, bugs, drifts only", () => {
+test("actionable report: header counts and blocks for failures and bugs only", () => {
   const ledger = {
     scenarios: ["good", "bad", "bug1"],
     records: [
       rec("good", 0, "ok1", "success", "e"),
       rec("bad", 0, "x", "fail", "obs", "expected X observed Y"),
-      rec("bug1", 0, "actual", "success", "A", undefined, "holds"),
-      rec("bug1", 1, "expected", "fail", "B", "div", "inverted"),
+      rec("bug1", 0, "expected", "fail", "B", "div", "expected"),
+      rec("bug1", 1, "actual", "success", "A", undefined, "actual"),
     ],
   };
   const out = report(ledger, { mode: "actionable" });
